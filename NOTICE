@@ -1,0 +1,192 @@
+Caladon
+Copyright 2026 Caladon
+
+This product includes software developed by the Caladon project and its
+contributors. Except where noted below for third-party components, the source
+code in this repository is licensed under the Apache License, Version 2.0 (the
+"License"); you may not use these files except in compliance with the License.
+You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+================================================================================
+PROMINENT ATTRIBUTION: LibreChat (web client)
+================================================================================
+
+The web client in this repository (the `web-client/librechat/` directory) is a
+DERIVED WORK of LibreChat, an open-source project by Danny Avila and the
+LibreChat contributors:
+
+    https://github.com/danny-avila/LibreChat
+
+LibreChat is distributed under the MIT License. Caladon's modifications are
+applied as an overlay (`web-client/overlay/`, `web-client/apply-overlay.sh`,
+see `web-client/SURGERY.md`) on top of an upstream LibreChat checkout. The upstream
+LibreChat checkout is fetched at build time via `web-client/setup.sh` (it is
+NOT vendored in this repository). The original LibreChat MIT license is
+reproduced in full in THIRD_PARTY_LICENSES.md; the fetched checkout also retains
+its own LICENSE, and all copyright and permission notices are preserved.
+
+The Caladon-authored web packages — `web-client/caladon/` (@caladon/protocol)
+and `web-client/shim/` (@caladon/web-shim) — are licensed Apache-2.0 (see their
+respective package.json), consistent with the rest of the repository and
+composable into the LibreChat-derived client.
+
+================================================================================
+COMPONENT LICENSING WITHIN THIS REPOSITORY
+================================================================================
+
+  - Repository default ............... Apache-2.0 (Caladon)
+  - web-client/librechat/ ............ MIT (LibreChat fork — derived work)
+  - web-client/caladon/ .............. Apache-2.0 (Caladon @caladon/protocol)
+  - web-client/shim/ ................. Apache-2.0 (Caladon @caladon/web-shim)
+  - caladon-core/ (Rust) ............. Apache-2.0 (Caladon shared trust-core; compiles
+                                       to a WASM module and a UniFFI Swift
+                                       xcframework)
+  - apple/ (SwiftyKit) ............... Apache-2.0 (Caladon)
+  - gateway/ (Python) ................ Apache-2.0 (Caladon)
+
+================================================================================
+THIRD-PARTY DEPENDENCIES
+================================================================================
+
+The following notable third-party components are used as dependencies. Full
+license texts and pointers are collected in THIRD_PARTY_LICENSES.md. Versions
+reflect the manifests / lockfiles in this repository at time of writing.
+
+--- Attestation (TEE quote verification) -------------------------------------
+
+  dcap-qvl (Rust crate) ....................................... MIT/Apache-2.0
+      Intel TDX/SGX DCAP quote verification. Used in caladon-core via the
+      pure-Rust `rustcrypto` backend for both the WASM and native targets.
+      Pinned at v0.5.2 (Cargo.lock).
+      https://github.com/Phala-Network/dcap-qvl
+
+  dcap-qvl-swift (Swift package + bundled Rust core via UniFFI) ........... MIT
+      Phala Network's native Swift DCAP verifier (xcframework). A direct
+      dependency of the Apple client (SwiftyKit), used for the typed
+      Quote/parse/reportData surface. Pinned at v0.5.2 (apple/Package.swift).
+      https://github.com/Phala-Network/dcap-qvl-swift
+
+--- Cryptographic primitives -------------------------------------------------
+
+  swift-sodium (Swift binding to libsodium) ............................... ISC
+      libsodium primitives (Argon2id, XChaCha20-Poly1305, X25519) for the
+      Apple client's seed-identity path. Pinned at >= 0.9.1
+      (apple/Package.swift). libsodium itself is ISC-licensed.
+      https://github.com/jedisct1/swift-sodium    https://libsodium.org
+
+  PyNaCl (Python binding to libsodium) ................................. Apache-2.0
+      XChaCha20-Poly1305 in the gateway (working-memory-key open path).
+      Pinned at >= 1.5 (gateway/pyproject.toml). Bundles libsodium (ISC).
+      https://github.com/pyca/pynacl
+
+  cryptography (Python / pyca) ............... Apache-2.0 OR BSD-3-Clause
+      Cryptographic primitives in the gateway. Pinned at >= 43
+      (gateway/pyproject.toml). Statically links OpenSSL (Apache-2.0).
+      https://github.com/pyca/cryptography
+
+  Rust crypto crates (caladon-core; RustCrypto ecosystem + dalek) ... MIT/Apache-2.0
+      argon2 (0.5.3), hkdf (0.12), sha2 (0.10), chacha20poly1305 (0.10.1),
+      ed25519-dalek (2.2.0), x25519-dalek (2.0.1), zeroize (1), base64 (0.22),
+      hex (0.4). All dual MIT/Apache-2.0.
+      https://github.com/RustCrypto    https://github.com/dalek-cryptography
+
+--- Rust bindings / build glue (caladon-core) --------------------------------
+
+  wasm-bindgen (0.2.122), serde-wasm-bindgen (0.6),
+  getrandom (0.2), uniffi (0.28.3), serde (1), serde_json (1) ...... MIT/Apache-2.0
+      WASM and UniFFI Swift binding scaffolding + serialization.
+      https://github.com/rustwasm/wasm-bindgen
+      https://github.com/mozilla/uniffi-rs    https://github.com/serde-rs/serde
+
+--- Gateway (Python service) -------------------------------------------------
+
+  FastAPI (>= 0.115) ......................................... MIT
+  Starlette (via FastAPI) .................................... BSD-3-Clause
+  Uvicorn (>= 0.32, [standard]) .............................. BSD-3-Clause
+  httpx (>= 0.27) ............................................ BSD-3-Clause
+  Pydantic / pydantic-settings (>= 2.5) ...................... MIT
+      Web framework, ASGI server, HTTP client, and settings for the gateway.
+      https://github.com/fastapi/fastapi    https://www.starlette.io
+      https://github.com/encode/uvicorn    https://github.com/encode/httpx
+      https://github.com/pydantic/pydantic
+
+--- Web client (Caladon-authored packages) -----------------------------------
+
+  Hono (>= 4.6) .............................................. MIT
+  @hono/node-server (>= 1.13) ................................ MIT
+      The stateless proxy shim (web-client/shim) that forwards opaque sealed
+      envelopes to the gateway.
+      https://github.com/honojs/hono
+
+  TypeScript, tsx, Vitest, @types/node (dev) ................. Apache-2.0 / MIT
+      Build/test tooling for @caladon/protocol and @caladon/web-shim.
+
+--- Web client (LibreChat fork — see prominent attribution above) ------------
+
+  React, react-dom (^18.2.0) ................................. MIT
+  Vite (^8) .................................................. MIT
+  @tanstack/react-query (^4.28) .............................. MIT
+      Plus the full upstream LibreChat dependency tree. LibreChat and the bulk
+      of its dependency graph are MIT-licensed; consult
+      web-client/librechat/package-lock.json for the authoritative, complete
+      transitive set and their individual licenses.
+      https://github.com/danny-avila/LibreChat
+
+================================================================================
+EXTERNAL SERVICES (deployed alongside, NOT bundled in this repository)
+================================================================================
+
+The following are independently-licensed, separately-deployed services that the
+gateway communicates with over the network (e.g. HTTP). Their source is NOT
+vendored or redistributed in this repository; they are listed for completeness
+and to credit the projects whose interfaces Caladon integrates against:
+
+  Letta (formerly MemGPT) .................................... Apache-2.0
+      Agentic-memory backend. The gateway is a client-facing API in front of a
+      separately-run Letta instance (proxied via httpx); Letta is not packaged
+      here. https://github.com/letta-ai/letta
+
+  RedPill / Phala attested inference ......................... (service / SDK)
+      OpenAI-compatible attested (TDX + GPU-CC) inference endpoint used as a
+      direct v1-chat backend. An external service, not bundled.
+      https://red-pill.ai    https://phala.network
+
+  litellm ................................................... MIT
+      Listed in docs/oss-reuse-map.md as the planned in-CVM provider-abstraction
+      layer. NOT a dependency of any manifest in this repository at this time.
+      https://github.com/BerriAI/litellm
+
+================================================================================
+REFERENCED / NOT BUNDLED
+================================================================================
+
+  tinfoil-swift ............................................. AGPL-3.0
+      Referenced in source comments and in docs/oss-reuse-map.md as a PLANNED
+      adapter for the SEV-SNP + Sigstore attestation regime, to be injected
+      behind the SwiftyKit `QuoteVerifier` protocol. It is NOT currently
+      imported, vendored, or distributed by this repository, and imposes no
+      license obligation on the current codebase. This notice will be updated if
+      and when tinfoil-swift is adopted as an actual dependency.
+      https://github.com/tinfoilsh/tinfoil-swift
+
+  Enchanted (gluonfield/enchanted) .......................... Apache-2.0
+      Identified in docs/oss-reuse-map.md as a fork starting-point for the
+      native Apple UI shell. To the extent any Enchanted-derived code is present
+      in the `apple/` tree, it is Apache-2.0 and compatible with this
+      repository's license. https://github.com/gluonfield/enchanted
+
+================================================================================
+
+This NOTICE file is provided for attribution and informational purposes. It is
+not a license. The Apache-2.0 obligation to preserve this NOTICE applies to the
+Apache-2.0-licensed portions of this work. For authoritative, complete, and
+up-to-date transitive dependency license information, consult the lockfiles:
+caladon-core/Cargo.lock, gateway (pip freeze / your resolver),
+web-client/*/package-lock.json, and the resolved Package.resolved for apple/.

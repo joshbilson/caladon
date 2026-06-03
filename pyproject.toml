@@ -1,0 +1,38 @@
+# Repo-root config for the cross-component test suites (tests/) and for the
+# tree-wide ruff lint. Component code (the gateway) keeps its own
+# gateway/pyproject.toml; this file governs the root `tests/` package and the
+# `ruff check` that CI runs from the repo root.
+
+[tool.pytest.ini_options]
+# Root suites only. The gateway suite is run separately from gateway/ (it needs
+# the gateway package installed). importmode=importlib lets same-named test
+# modules coexist across tests/leak, tests/crypto, tests/attestation without
+# requiring __init__.py packages.
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+pythonpath = ["."]  # makes root packages (swifty_inference) importable by tests/
+
+[tool.ruff]
+# CONSERVATIVE by design: Gate 0 requires GREEN CI, so the rule set is scoped so
+# the CURRENT tree passes. Target the repo's Python version.
+target-version = "py312"
+extend-exclude = [
+    ".venv",
+    "gateway/.venv",
+    "gateway/swifty_gateway.egg-info",
+]
+
+[tool.ruff.lint]
+# Enabled: pyflakes (F) catches real bugs (undefined names, unused imports);
+# E9 catches syntax/IndentationError. We intentionally do NOT enable the full
+# pycodestyle (E/W) set, since the existing gateway code uses long lines and
+# other stylistic choices we must not churn (charter: do not make CI red on
+# pre-existing style, do not edit gateway app logic).
+select = ["F", "E9"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pre-existing gateway unit tests carry an unused `import pytest` (F401). These
+# files are owned by the gateway author (M1b) and are out of Agent H's lane to
+# edit; ignoring F401 here keeps CI green without churning another agent's code.
+# New test code under tests/ is held to the full F rule set.
+"gateway/tests/*.py" = ["F401"]

@@ -1,0 +1,42 @@
+# XcodeGen spec for Caladon (iOS + macOS), generated into SwiftyApp.xcodeproj.
+# The .xcodeproj is NOT committed — run `xcodegen generate` (CI + local) from this dir.
+# The app is a thin SwiftUI shell over SwiftyKit (the testable client logic library).
+# (The Xcode target/scheme keep the name "SwiftyApp" to avoid CI/fastlane churn; the
+#  user-facing product is "Caladon" via the display name + bundle id ai.caladon.app.)
+# Dev/simulator build is UNSIGNED; TestFlight signing is wired later (B-APPLE).
+name: SwiftyApp
+options:
+  bundleIdPrefix: ai.caladon
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  SwiftyKit:
+    path: ..          # the SwiftyKit SPM package lives at apple/
+
+targets:
+  SwiftyApp:
+    type: application
+    platform: [iOS, macOS]
+    sources:
+      - path: Sources
+    dependencies:
+      - package: SwiftyKit
+        product: SwiftyKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.caladon.app
+        INFOPLIST_KEY_CFBundleDisplayName: Caladon
+        GENERATE_INFOPLIST_FILE: "YES"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        # Dev/simulator + CI build with no signing; the TestFlight pipeline (fastlane,
+        # B-APPLE) sets the team + signing identity when those credentials exist.
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        # iOS-only Info.plist generation keys (ignored on macOS).
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"

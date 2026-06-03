@@ -1,0 +1,52 @@
+.DS_Store
+node_modules/
+.env
+*.xcuserstate
+build/
+DerivedData/
+gateway/.venv/
+gateway/.pytest_cache/
+gateway/*.egg-info/
+# root-level test/lint env + caches (uv creates these when running root suites)
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+# root uv lock from running the root test/lint workspace (gateway/uv.lock IS tracked)
+/uv.lock
+
+# Swift / SwiftPM build artifacts
+apple/.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+
+# caladon-core UniFFI xcframework — BUILD ARTIFACT, regenerate with
+# apple/scripts/build-caladon-core-xcframework.sh (the script + the generated Swift binding
+# at apple/Sources/CaladonCoreFFI/caladon_core.swift ARE committed; the xcframework is not).
+apple/Frameworks/CaladonCoreFFI.xcframework/
+
+# Gate-1 harness ephemeral secrets (generated per-run, shredded on exit)
+infra/cvm/.env.gate1
+
+# Local Claude/ralph session state (not project source)
+.claude/
+
+# Gate-1 live-deploy transient/bulky evidence (RESULT.md + small proofs are kept)
+infra/spikes/gate1-live/curl.err
+infra/spikes/gate1-live/logs.txt
+infra/spikes/gate1-live/cvm-get.json
+infra/spikes/gate1-live/cvm-attestation.json
+
+# XcodeGen-generated project (regenerate with `xcodegen generate`) + Xcode build output
+apple/SwiftyApp/SwiftyApp.xcodeproj/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# fastlane run artifacts
+apple/SwiftyApp/fastlane/report.xml
+apple/SwiftyApp/fastlane/README.md
+apple/SwiftyApp/*.ipa
+apple/SwiftyApp/build/
+
+# Vendored LibreChat upstream for the web client — cloned by web-client/setup.sh, NOT committed (see web-client/SURGERY.md)
+web-client/librechat/

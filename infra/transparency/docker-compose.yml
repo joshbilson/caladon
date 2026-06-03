@@ -1,0 +1,121 @@
+# Local Sigstore Rekor transparency log (Apple-PCC req #5 + Confer).
+#
+# This is the canonical Rekor topology: Rekor's append-only log is backed by a
+# Trillian personality (log-server + log-signer) on a MySQL/MariaDB store.
+# `publish.sh` posts the pinned CVM measurements + reproducible-build hashes as a
+# signed entry; `verify.sh` fetches the entry and checks its inclusion proof
+# against the log's signed tree head. See README.md.
+#
+#   docker compose -f infra/transparency/docker-compose.yml up -d
+#   ./infra/transparency/publish.sh
+#   ./infra/transparency/verify.sh <logIndex|uuid>
+#   docker compose -f infra/transparency/docker-compose.yml down -v
+#
+# LOCAL DEV ONLY — ephemeral keys, no TLS, data lives in a named volume. A
+# production deployment uses a managed/operated Rekor (or the Sigstore public
+# good instance) so the log is independently operated from the thing it attests.
+
+name: caladon-transparency
+
+services:
+  # ── Trillian storage backend ────────────────────────────────────────────────
+  mysql:
+    image: gcr.io/trillian-opensource-ci/db_server:v1.6.1
+    environment:
+      MYSQL_ROOT_PASSWORD: zaphod
+      MYSQL_DATABASE: test
+      MYSQL_USER: test
+      MYSQL_PASSWORD: zaphod
+    healthcheck:
+      # The trillian db_server is MySQL 8.x (no /etc/init.d script); ping the
+      # server with the configured creds instead.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pzaphod"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  # ── Trillian log server (the verifiable Merkle log) ──────────────────────────
+  # NOTE: images are pinned by TAG here for a reproducible-enough local stack.
+  # A hardened deploy pins by digest (sha256:…); we do not invent digests we have
+  # not resolved offline. `publish.sh` records the resolved digests it actually ran.
+  trillian-log-server:
+    image: gcr.io/trillian-opensource-ci/log_server:latest
+    command:
+      - "--storage_system=mysql"
+      - "--mysql_uri=test:zaphod@tcp(mysql:3306)/test"
+      - "--rpc_endpoint=0.0.0.0:8090"
+      - "--http_endpoint=0.0.0.0:8091"
+      - "--alsologtostderr"
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8090:8090"
+      - "8091:8091"
+
+  # ── Trillian log signer (sequences entries into the Merkle tree) ─────────────
+  trillian-log-signer:
+    image: gcr.io/trillian-opensource-ci/log_signer:latest
+    command:
+      - "--storage_system=mysql"
+      - "--mysql_uri=test:zaphod@tcp(mysql:3306)/test"
+      - "--rpc_endpoint=0.0.0.0:8090"
+      - "--http_endpoint=0.0.0.0:8091"
+      - "--force_master"
+      - "--alsologtostderr"
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "8190:8090"
+      - "8191:8091"
+
+  # ── Redis (Rekor's search index backend) ─────────────────────────────────────
+  redis:
+    image: docker.io/redis:7-alpine
+    command: ["--bind", "0.0.0.0", "--appendonly", "no"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "6379:6379"
+
+  # ── Rekor server (the transparency-log personality our scripts talk to) ──────
+  rekor-server:
+    image: gcr.io/projectsigstore/rekor-server:latest
+    command:
+      - "serve"
+      - "--trillian_log_server.address=trillian-log-server"
+      - "--trillian_log_server.port=8090"
+      - "--redis_server.address=redis"
+      - "--redis_server.port=6379"
+      - "--rekor_server.address=0.0.0.0"
+      - "--rekor_server.signer=memory"   # ephemeral signing key — LOCAL DEV ONLY
+      - "--enable_retrieve_api=true"
+      - "--enable_attestation_storage=true"
+      - "--attestation_storage_bucket=file:///var/run/attestations"
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      trillian-log-server:
+        condition: service_started
+      trillian-log-signer:
+        condition: service_started
+    ports:
+      - "3000:3000"
+    volumes:
+      - rekor-attestations:/var/run/attestations
+
+volumes:
+  mysql-data:
+  rekor-attestations:

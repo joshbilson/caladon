@@ -1,0 +1,12 @@
+# Heavy wasm-bindgen binary — regenerate with ./build-wasm.sh (do NOT commit ~950KB to git).
+# We DO commit the small generated glue (caladon_core.js / *.d.ts / package.json) so the SDK
+# type-checks and imports without a build step; only the binary is ignored.
+wasm/caladon_core_bg.wasm
+
+# Node
+node_modules/
+*.tsbuildinfo
+dist/
+
+# wasm-pack drops this in the out dir; build-wasm.sh removes it, but ignore it defensively.
+wasm/.gitignore

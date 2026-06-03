@@ -1,0 +1,6 @@
+# Ephemeral local-dev signing keys + publish receipts — never commit.
+# A real publish uses an offline release key, and receipts are run artifacts.
+keys/
+receipts/
+*.ec.key
+*.ed25519.key

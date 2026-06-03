@@ -1,0 +1,72 @@
+# Caladon gateway v1 — the 24/7 attested CVM (T1 confidential tier, docs/deployment-tiers.md).
+#
+# Gateway-only: the gateway is a ciphertext router that opens the per-session-sealed prompt
+# ONLY in TEE RAM, calls the attested RedPill inference enclave (itself Intel TDX + H200 CC),
+# and seals the reply back. No Letta/Postgres here — v1 is direct attested inference; agent
+# memory (the full dstack-compose.yml backbone) is a later upgrade. No plaintext on the wire.
+#
+# ── ATTESTATION ──────────────────────────────────────────────────────────────────────────
+# The dstack guest-agent UNIX socket is bind-mounted so GET /v1/attestation returns a REAL
+# in-CVM TDX quote: the gateway POSTs {report_data: SHA-256(client eph_pub)} to
+# http://dstack/GetQuote over /var/run/dstack.sock; dstack binds it verbatim into
+# report_data[0:32] (contracts/attestation-evidence.md §2.1d).
+#
+# ── CUSTOM DOMAIN (trust-no-one) ─────────────────────────────────────────────────────────
+# dstack-ingress provisions a Let's Encrypt cert for gw.caladon.ai via DNS-01 INSIDE the CVM
+# and writes a CAA record (SET_CAA=true) so ONLY this TEE can ever issue a cert for the domain
+# — TLS terminates in the attested boundary, not at any proxy (plaintext-exposure map row 1).
+#
+# ── MEASUREMENT ──────────────────────────────────────────────────────────────────────────
+# The compose_hash of THIS file is measured into the attestation (rtmr3/app_id) and pinned in
+# docs/security/measurements.md — re-derive + re-pin whenever this file changes. `logging:none`
+# on the gateway is the no-plaintext-in-logs control (row 5). Secrets (GATEWAY_INFERENCE_KEY,
+# CLOUDFLARE_API_TOKEN) arrive as dstack-SEALED env (--env-file at deploy) — NOT in this measured
+# file, NOT in the published image, never logged.
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:-ghcr.io/joshbilson/caladon-gateway:gw-v1}
+    restart: unless-stopped
+    environment:
+      GATEWAY_RUN_MODE: cvm
+      GATEWAY_ACCOUNTS_STORE: /data/accounts.json
+      GATEWAY_TRANSCRIPT_STORE: /data/transcripts.json
+      GATEWAY_DSTACK_QUOTE_URL: http://dstack/GetQuote
+      GATEWAY_INFERENCE_BASE: ${GATEWAY_INFERENCE_BASE:-https://api.redpill.ai/v1}
+      GATEWAY_INFERENCE_MODEL: ${GATEWAY_INFERENCE_MODEL:-phala/qwen3.6-35b-a3b-uncensored}
+      GATEWAY_INFERENCE_KEY: ${GATEWAY_INFERENCE_KEY}     # dstack-sealed; never in the image/compose_hash
+      # Keep these attested models hot so the app feels instant (no scale-to-zero cold-start).
+      GATEWAY_KEEPWARM_MODELS: ${GATEWAY_KEEPWARM_MODELS:-phala/qwen3.6-35b-a3b-uncensored,phala/qwen3-30b-a3b-instruct-2507,phala/deepseek-v3.2}
+      GATEWAY_KEEPWARM_INTERVAL: ${GATEWAY_KEEPWARM_INTERVAL:-120}
+    expose:
+      - "8088"        # reachable by dstack-ingress (and dstack-gateway) on the in-CVM network
+    ports:
+      - "8088:8088"   # dstack-gateway wildcard endpoint (cert in-CVM); the CVM has no direct NIC
+    volumes:
+      - gwdata:/data
+      - /var/run/dstack.sock:/var/run/dstack.sock         # in-CVM guest-agent quote/Info socket
+    logging:
+      driver: "none"   # no logging of request paths/metadata (plaintext-exposure map row 5)
+
+  # Custom-domain TLS terminating INSIDE the CVM (trust-no-one). Sees only sealed envelopes +
+  # seed-auth headers (never plaintext prompts); the CAA record locks cert issuance to this TEE.
+  dstack-ingress:
+    image: dstacktee/dstack-ingress:20250924@sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "443:443"
+    environment:
+      DOMAIN: ${CALADON_DOMAIN:-gw.caladon.ai}
+      TARGET_ENDPOINT: http://gateway:8088
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}       # dstack-sealed; Zone:DNS:Edit on caladon.ai
+      GATEWAY_DOMAIN: _.${DSTACK_GATEWAY_DOMAIN:-dstack-pha-prod5.phala.network}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-${CERTBOT_EMAIL}}
+      SET_CAA: "true"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - cert-data:/etc/letsencrypt
+
+volumes:
+  gwdata:
+  cert-data:

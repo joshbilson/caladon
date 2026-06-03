@@ -1,0 +1,9 @@
+# caladon-gateway reproducible-build record
+# generated: 2026-06-03T10:40:38Z (UTC)
+image-ref:          ghcr.io/joshbilson/caladon-gateway:gw-v1
+platform:           linux/amd64
+base-image-pinned:  python@sha256:866411c135b507754efdf2fda51484be4d3d7d5173ed53cd083106132e710904
+oci-tar-sha256:     n/a
+image-manifest:     (dry-run; image digest not computed)
+SOURCE_DATE_EPOCH:  0
+source-ref:         cb3704c

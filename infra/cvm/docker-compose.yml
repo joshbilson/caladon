@@ -1,0 +1,81 @@
+# Letta-in-CVM — T1 attested tier (docs/deployment-tiers.md).
+#
+# Runs INSIDE a Phala dstack TDX CVM. Postgres + embeddings + Letta + gateway ALL run
+# in-CVM so no plaintext ever leaves the TEE (plaintext-exposure map rows 1-3,5). dstack
+# provides: disk encryption bound to the attestation-released key, TLS terminating in-CVM
+# (the CVM cert carries the TDX quote, contracts/attestation-evidence.md), and the quote.
+# One CVM per tenant (multi-tenant by isolation).
+#
+# Hardening: data-touching services use `logging: driver none` (fail-closed no-logging of
+# memory/prompt content); only the gateway exposes a port (TLS-in-CVM); Postgres/Letta/
+# embeddings are reachable ONLY inside the CVM network.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data          # dstack-encrypted disk (attestation-released key)
+      - ../postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: "none"   # no logging of memory contents at rest
+
+  embeddings:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # Embeddings are computed from plaintext and are invertible -> MUST run in-CVM, never
+    # on a trusted host (plaintext-exposure map row 3).
+    volumes:
+      - ollama:/root/.ollama
+    logging:
+      driver: "none"
+
+  letta:
+    image: letta/letta:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embeddings:
+        condition: service_started
+    environment:
+      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      OLLAMA_BASE_URL: http://embeddings:11434          # in-CVM embeddings
+      OPENAI_API_BASE: ${ATTESTED_INFERENCE_BASE}       # attested provider (Redpill/Phala/Tinfoil)
+      OPENAI_API_KEY: ${ATTESTED_INFERENCE_KEY}
+      SECURE: "true"
+      LETTA_SERVER_PASSWORD: ${LETTA_SERVER_PASSWORD}
+    # No host port: only the in-CVM gateway reaches Letta.
+    logging:
+      driver: "none"
+
+  gateway:
+    build: ../../gateway
+    restart: unless-stopped
+    depends_on:
+      - letta
+    environment:
+      GATEWAY_RUN_MODE: cvm
+      GATEWAY_LETTA_BASE_URL: http://letta:8283
+      GATEWAY_LETTA_PASSWORD: ${LETTA_SERVER_PASSWORD}
+      GATEWAY_ACCOUNTS_STORE: /data/accounts.json
+    ports:
+      - "8088:8088"   # all-interfaces INSIDE the CVM; dstack-gateway is the external TLS
+                      # boundary (cert carries the TDX quote). The CVM has no direct NIC.
+    volumes:
+      - gwdata:/data
+    logging:
+      driver: "none"   # no logging of request paths/metadata (plaintext-exposure map row 5)
+
+volumes:
+  pgdata:
+  ollama:
+  gwdata:

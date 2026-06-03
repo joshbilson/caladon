@@ -1,0 +1,132 @@
+// UniFFI interface for the native Swift xcframework (SwiftyKit) — the AUTHORITATIVE interface
+// contract. Mirrors SwiftyKit/Attestation.swift (Verdict / VerdictReason) + the sealed-channel
+// crypto, so the Swift app consumes the SAME Rust trust-core as the web (wasm) client. The
+// cryptographic quote verification (dcap-qvl) + channel binding live in Rust; Swift owns the UI.
+//
+// TOOLCHAIN NOTE (P3/R2): UDL-mode codegen (`uniffi::generate_scaffolding`) does NOT compile on
+// rustc 1.96 (a `udl_derive` macro/compiler incompat reproduced with a 3-line crate on uniffi
+// 0.28 AND 0.29). The crate therefore ships the SAME surface via UniFFI PROC-MACRO mode (see
+// src/ffi.rs). This .udl is kept as the canonical contract and matches src/ffi.rs 1:1; re-point
+// build.rs at it once a uniffi/rustc combo compiles UDL mode again.
+//
+// Collateral is fetched by the CALLER (matching SwiftyKit/DcapVerifier.swift, which fetches PCS
+// collateral keyed on the quote FMSPC and passes the JSON in) and handed to the offline,
+// deterministic `verify_quote`. The native async fetch helper lives in Rust
+// (`attestation::collateral::fetch_collateral_json`) and is NOT exposed across FFI (it would need
+// a tokio runtime binding); the Swift app already owns its collateral fetch.
+
+namespace caladon_core {
+    // Lowercase-hex SHA-256(eph_pub) — the channel binding placed in report_data[0:32].
+    string challenge_hex(bytes eph_pub);
+
+    // Fail-closed verification with collateral PASSED IN (offline/deterministic). Never throws on
+    // a verification failure — returns a Verdict with ok=false and the specific reason.
+    Verdict verify_quote(
+        bytes quote_bytes,
+        string collateral_json,
+        string info_json,
+        u64 now_secs,
+        string expected_challenge_hex,
+        PinnedSet pinned
+    );
+
+    // --- sealed channel ---
+    [Throws=SealError]
+    bytes x25519_public(bytes private_bytes);
+
+    [Throws=SealError]
+    bytes derive_session_key(bytes my_private, bytes their_public, bytes client_pub, bytes cvm_pub);
+
+    // seal_* return `nonce || ct`; open_* take `nonce || ct`.
+    [Throws=SealError]
+    bytes seal_wmk(bytes session_key, bytes wmk, string account_id, i64 v);
+    [Throws=SealError]
+    bytes open_wmk(bytes session_key, bytes nonce_ct, string account_id, i64 v);
+    [Throws=SealError]
+    bytes seal_chat(bytes session_key, bytes plaintext, string account_id, i64 v);
+    [Throws=SealError]
+    bytes open_chat(bytes session_key, bytes nonce_ct, string account_id, i64 v);
+
+    // --- passkey-PRF seed custody ---
+    // wrap returns `nonce || ct`; unwrap takes `nonce || ct`.
+    [Throws=PasskeyError]
+    bytes passkey_derive_wrapping_key(bytes prf32);
+    [Throws=PasskeyError]
+    bytes passkey_wrap_seed(bytes prf32, bytes seed);
+    [Throws=PasskeyError]
+    bytes passkey_unwrap_seed(bytes prf32, bytes wrapped);
+
+    // --- seed transcription codec (Crockford base32 + 2-byte checksum) ---
+    [Throws=SeedError]
+    string seed_encode(bytes seed);
+    [Throws=SeedError]
+    bytes seed_decode(string text);
+
+    // --- metadata padding (uint32_be(len) || pt || zero-fill to a bucket) ---
+    [Throws=PadError]
+    bytes pad(bytes plaintext);
+    [Throws=PadError]
+    bytes unpad(bytes padded);
+};
+
+// The A7 failure→code table (attestation-evidence.md §1). Matches the Swift VerdictReason.
+enum VerdictReason {
+    "Ok",
+    "QuoteSigInvalid",
+    "TcbOutOfDate",
+    "CollateralStale",
+    "MeasurementUnpinned",
+    "ComposeMismatch",
+    "AppIdMismatch",
+    "BindingMismatch",
+    "NoLogAbsent",
+    "RegimeUnsupported",
+};
+
+dictionary Verdict {
+    boolean ok;
+    VerdictReason reason;
+    boolean measurement_matched;
+};
+
+// The client-shipped pinned set (no TOFU). measurements = hex(mr_td||rtmr0||rtmr1||rtmr2).
+dictionary PinnedSet {
+    sequence<string> measurements;
+    sequence<string> compose_hashes;
+    sequence<string> workload_ids;
+};
+
+[Error]
+enum SealError {
+    "BadKey",
+    "BadNonce",
+    "LowOrderPoint",
+    "OpenFailed",
+    "SealFailed",
+};
+
+// Passkey-PRF seed-custody error. `Envelope` flattens the internal envelope error (the FFI does
+// not need to distinguish AEAD sub-cases; unwrap failures surface as `UnwrapFailed`).
+[Error]
+enum PasskeyError {
+    "BadPrfLength",
+    "BadSeedLength",
+    "UnwrapFailed",
+    "Envelope",
+};
+
+// Seed-codec error (mistyped/corrupt recovery string → fail closed).
+[Error]
+enum SeedError {
+    "BadLength",
+    "BadChecksum",
+    "BadCharacter",
+};
+
+// Metadata-padding error.
+[Error]
+enum PadError {
+    "TooLong",
+    "TooShort",
+    "DeclaredLenExceedsBuffer",
+};

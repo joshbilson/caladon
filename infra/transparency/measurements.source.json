@@ -1,0 +1,95 @@
+{
+  "$schema": "./measurements.schema.md",
+  "_comment": [
+    "SOURCE OF TRUTH for docs/security/measurements.md. Edit THIS file, then run",
+    "`python3 infra/transparency/gen-measurements.py` to regenerate the doc. A test",
+    "(tests/transparency/test_measurements_generated.py) fails CI if the committed",
+    "doc does not match what this source generates — so the measurements table",
+    "cannot drift or be hand-edited undetectably (Apple-PCC req #5, Confer).",
+    "",
+    "Values are the REAL pinned tuple captured live 2026-06-03 from the running",
+    "caladon-gw CVM; see provenance.evidence for the on-disk artifacts they came from."
+  ],
+  "doc_status": "SEEDED (chat Agent CVM, dev-pinned) — schema + policy defined; the first real **dev-pinned** tuple is recorded from the live `caladon-gw` v1 gateway CVM (2026-06-03, §2.1). Remaining tuples are seeded as those enclave images are produced; all graduate to reproducible at Phase 5.",
+  "owner": "Agent G (registry/doc) with **C** (CVM measurements) and **E** (inference measurements); **D** consumes the pinned set; **H** tests pinning fail-closed.",
+  "referenced_by": "`contracts/attestation.md §6` (\"The mapping table lives in `/docs/security/measurements.md`\").",
+  "pinning_policy_summary": {
+    "pin": ["mrtd", "rtmr0", "rtmr1", "rtmr2", "compose_hash", "os_image_hash"],
+    "per_instance_advisory": ["app_id", "rtmr3"],
+    "note": "dstack derives app_id per deployment and rtmr3 binds the app-id/compose-hash/instance-id event log, so a redeploy changes app_id + rtmr3 even with an identical compose. mrtd/rtmr0..2 + compose_hash + os-image-hash are the stable identity."
+  },
+  "agent_cvm": {
+    "chat_gateway_v1": {
+      "label": "chat / gateway-v1 (direct attested inference, no Letta) — `caladon-gw`, dstack 0.5.x, `tdx.small`.",
+      "captured": "Captured live 2026-06-03 from the running CVM (`infra/spikes/gw-v1-live/cvm-attestation.json`). Compose: `infra/cvm/dstack-compose.gw-v1.yml`. **dev-pinned / not-yet-reproducible** (image is pinned by tag `:gw-v1`, not digest — digest-pin is a follow-up; Phase-5 reproducible-build ref TBD).",
+      "tier": "chat",
+      "component": "Agent CVM (gateway v1, + dstack-ingress for gw.caladon.ai)",
+      "mrtd": "f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077",
+      "rtmr0": "68102e7b524af310f7b7d426ce75481e36c40f5d513a9009c046e9d37e31551f0134d954b496a3357fd61d03f07ffe96",
+      "rtmr1": "07e6f51aa763abfe75c3ddfbf4f425fe3f0ceff66d807a75e049303dce9addf68e7218729bd419638af63a370f65878c",
+      "rtmr2": "a2a58c9a959a4fa44bd6da0c97a2270c051faf12084cfe91ae900e4fdff6cdd4f69a82005e04ee920f231497894d677f",
+      "rtmr3": "3e88269c02243b7ac42343576f1623f719e11f24e5d374ef0c918681e11fe09211c1e3192103ab64b5b0ebfeffe5cc74",
+      "compose_hash": "47bae9194b7c52ed006f6af0e31a9e8eccdf2a9785985e820b632e4a41c5cc17",
+      "os_image_hash": "de9c74f0c85d0820ce075cb4a99f8e39f7b681be632907c5bf8bdc95ea72feb9",
+      "os_image_hash_note": "mrtd/rtmr0 unchanged dev→prod ⇒ same base",
+      "app_id": "6643c22f716a1a48eab209feda535db501659175",
+      "os_image_note": "**production (`--no-dev-os`)** — root SSH break-glass REFUSED (verified: ssh → \"Connection closed\", not connectable). Apple-PCC req #3 (no privileged runtime access).",
+      "domain": "`gw.caladon.ai` (LE cert provisioned in-CVM via dstack-ingress DNS-01; CAA-locked to this TEE)",
+      "reproducible_build_ref": "_dev-pinned / not-yet-reproducible_",
+      "source_ref": "`main` @ deploy (image `ghcr.io/joshbilson/caladon-gateway:gw-v1` digest `sha256:ae613a90…`, compose `dstack-compose.gw-v1.yml`)"
+    },
+    "chat_full_backbone": {
+      "tier": "chat",
+      "component": "Agent CVM (full)",
+      "label": "chat / full-backbone Agent CVM (Letta + Postgres + embeddings) — `infra/cvm/dstack-compose.yml`",
+      "status": "empty"
+    },
+    "coding": {
+      "tier": "coding",
+      "component": "Agent CVM",
+      "status": "empty"
+    }
+  },
+  "inference_enclave": {
+    "_section_note": "Phala/Redpill: Intel TDX + NVIDIA H100 CC; Tinfoil/NEAR fallback",
+    "chat": {
+      "tier": "chat",
+      "component": "Inference enclave",
+      "status": "empty"
+    },
+    "coding": {
+      "tier": "coding",
+      "component": "Inference enclave",
+      "status": "empty"
+    }
+  },
+  "reproducible_build_hashes": {
+    "_note": "Phase-5 reproducible-build artifact hashes. The enclave images + iOS client a reviewer rebuilds from public source and confirms against the pinned measurement (reproducible-builds.md §2). EMPTY until Phase 5; published as a signed transparency-log entry alongside the pinned tuple so a stranger can verify the chain source→hash→measurement.",
+    "gateway_image": {
+      "artifact": "ghcr.io/joshbilson/caladon-gateway:gw-v1 (linux/amd64)",
+      "digest": "sha256:ae613a90...",
+      "digest_status": "PARTIAL — full digest pin is a follow-up (image pinned by tag, not digest; RESULT.md operational notes)",
+      "reproducible": false
+    },
+    "dstack_ingress_image": {
+      "artifact": "dstacktee/dstack-ingress:20250924",
+      "digest": "sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32",
+      "reproducible": false,
+      "note": "third-party image, digest-pinned in dstack-compose.gw-v1.yml"
+    }
+  },
+  "provenance": {
+    "captured_utc": "2026-06-03",
+    "cvm_name": "caladon-gw",
+    "cvm_id": "7b1a559a-4d81-4eb4-add9-e623ea0ab70a",
+    "instance_type": "tdx.small",
+    "dstack_version": "0.5.x (dstack-pha-prod5)",
+    "evidence": [
+      "infra/spikes/gw-v1-live/cvm-attestation.json",
+      "infra/spikes/gw-v1-live/cvm-get.json",
+      "infra/spikes/gw-v1-live/RESULT.md",
+      "infra/cvm/dstack-compose.gw-v1.yml"
+    ],
+    "note": "rtmr3 + app_id are deploy-specific; the values here are the CURRENTLY-PINNED tuple (§2.1). Older deploys in RESULT.md show different rtmr3/app_id — expected per the pinning policy."
+  }
+}

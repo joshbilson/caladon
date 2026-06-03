@@ -1,0 +1,5 @@
+# Filled from 1Password at run time by ../testflight.sh (op://$OP_VAULT/appstore/*).
+# app_identifier + team are read from env so no creds live in the repo.
+app_identifier(ENV["SWIFTY_BUNDLE_ID"])     # e.g. com.swifty.app
+apple_id(ENV["SWIFTY_APPLE_ID"])            # optional; ASC API key auth is primary
+team_id(ENV["SWIFTY_TEAM_ID"])

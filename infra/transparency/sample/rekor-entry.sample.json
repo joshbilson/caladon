@@ -1,0 +1,28 @@
+{
+  "_note": "Live sample captured from the local Rekor stack (infra/transparency/docker-compose.yml) during the publish+verify dry-run. Keys/signatures are ephemeral local-dev keys; not a production attestation. Reproduce: docker compose up -d; REKOR_MODE=api ./publish.sh; (grow tree); REKOR_MODE=api ./verify.sh.",
+  "record_sha256": "431658e17d2c4df6ef56d30264a9a5c00dde45dea376980184a4cd1cb3c1a7df",
+  "entry_uuid": "85ecefac966466d0c29d7c93ba080d71c1c0780c8238a71cae41724d95d9cecc",
+  "entry": {
+    "attestation": {},
+    "body": "eyJhcGlWZXJzaW9uIjoiMC4wLjEiLCJzcGVjIjp7ImRhdGEiOnsiaGFzaCI6eyJhbGdvcml0aG0iOiJzaGEyNTYiLCJ2YWx1ZSI6IjQzMTY1OGUxN2QyYzRkZjZlZjU2ZDMwMjY0YTlhNWMwMGRkZTQ1ZGVhMzc2OTgwMTg0YTRjZDFjYjNjMWE3ZGYifX0sInNpZ25hdHVyZSI6eyJjb250ZW50IjoiTUVZQ0lRQ01ONStOQTBReWhrKzRVa1dIN2o2TEFqZURzRnZJd0gySHh6NC90VFJEaHdJaEFOeEhnaE5MYVlrbEFCR29IVnR0QnlrU2hkdlZSbHB2RCtMdENsRnBYUHRhIiwiZm9ybWF0IjoieDUwOSIsInB1YmxpY0tleSI6eyJjb250ZW50IjoiTFMwdExTMUNSVWRKVGlCRFJWSlVTVVpKUTBGVVJTMHRMUzB0Q2sxSlNVSnZWRU5EUVZWbFowRjNTVUpCWjBsVlpFNXlZM1pvUW1oaFpGRk1kR2d4TUVkTWJERjBVMFF5TkZWcmQwTm5XVWxMYjFwSmVtb3dSVUYzU1hjS1NtcEZhMDFEU1VkQk1WVkZRWGQzWWxreVJuTlpWMUoyWW1reGRGcFhSbnBrV0Vwc1lsZFdkV1JJVFhSak1teHVZbTFXZVUxQ05GaEVWRWt5VFVSWmR3cE5la1YzVFdwamVrMXNiMWhFVkVrelRVUlpkMDE2UlhkTmFtTjZUV3h2ZDBwcVJXdE5RMGxIUVRGVlJVRjNkMkpaTWtaeldWZFNkbUpwTVhSYVYwWjZDbVJZU214aVYxWjFaRWhOZEdNeWJHNWliVlo1VFVacmQwVjNXVWhMYjFwSmVtb3dRMEZSV1VsTGIxcEplbW93UkVGUlkwUlJaMEZGU1dSelVrdDZjM0VLVTFWc01XbHVURWhIVkdobE9UaHZUVVJRYzNCTlRVaE5aV0kzTVRSSVFWSjJPV2hUYm1KRmIxZDBOa1ZHYTBwV09YWkxlWFJpTjBSNlVtSnNlRVJVVXdwUVduaDVTSFJZT1hkTFRXNVJOazVVVFVaRmQwaFJXVVJXVWpCUFFrSlpSVVpLUlZCM2IzRnpTRUZFVjIxWVpqUlNNbEFyTkcxdVExa3lNMVJOUWpoSENrRXhWV1JKZDFGWlRVSmhRVVpLUlZCM2IzRnpTRUZFVjIxWVpqUlNNbEFyTkcxdVExa3lNMVJOUVRoSFFURlZaRVYzUlVJdmQxRkdUVUZOUWtGbU9IY0tRMmRaU1V0dldrbDZhakJGUVhkSlJGTkJRWGRTVVVsb1FWQlVTa2t4WlZNMFJXcHpSeXMzZERRMmRFUlpUSFpRZERWRFkwZzFVREZWZEZadU5qRk9TZ281TkZVMlFXbENPV1JsVlRaQ01WaEVZbnBMUW5JM2FXd3JUazFKTlVoNFVuaGFZbE5vTmpCRGIyRnlUVnBVUldrNVp6MDlDaTB0TFMwdFJVNUVJRU5GVWxSSlJrbERRVlJGTFMwdExTMEsifX19LCJraW5kIjoicmVrb3JkIn0=",
+    "integratedTime": 1780482452,
+    "logID": "9bc0b65024e404c5f84df5de01c39d858833929aa9185ad1bb6ead8ca0eef75a",
+    "logIndex": 0,
+    "verification": {
+      "inclusionProof": {
+        "hashes": [
+          "efc0f4d58c1399b04b158a61882a0f3d6c3dcbdb1a8a241668b2fde047cde2aa"
+        ],
+        "logIndex": 0,
+        "rootHash": "c9a2fba95c62e1653e662b09afb41d468e145cb94c82fb251a121f2604cdf610",
+        "treeSize": 2
+      },
+      "signedEntryTimestamp": "MEYCIQDvhXOJLl0n2jevgiaiwyrKOgHxIaJ0nF1CYPZ56IXi/gIhAIb7REUW1DqJdvKLrtNErfYbn+g5jmsTGXEvJEsKKfYN"
+    }
+  },
+  "signed_tree_head": {
+    "rootHash": "c9a2fba95c62e1653e662b09afb41d468e145cb94c82fb251a121f2604cdf610",
+    "signedTreeHead": "Rekor\n2\nyaL7qVxi4WU+ZisJr7QdRo4UXLlMgvslGhIfJgTN9hA=\n\n\u2014 rekor.sigstore.dev m8C2UDBFAiEAsVUAPdtZFqYywx2KdCqGSPZ9CXDVp83siiW27SipJ2sCIF+J+zYfL34tB54QIAl2nnXMAqZetJr1ooMC1eKRStdE\n",
+    "treeSize": 2
+  }
+}

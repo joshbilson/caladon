@@ -1,0 +1,26 @@
+# Gateway-only dstack smoke compose — the FIRST live Gate-1 deploy (gateway in a real
+# attested CVM, reachable, multi-tenant onboarding + ciphertext-router /v1/messages live).
+# The full backbone (Letta/Postgres/Ollama) layers on in dstack-compose.yml afterward.
+#
+# NOTE: logging is ENABLED here (not `none`) ONLY because this is a throwaway bring-up smoke
+# with NO real user data — it lets us read container logs if health doesn't come up. The
+# production compose (dstack-compose.yml) keeps `logging: none` (the no-plaintext control).
+# /v1/attestation is left unconfigured (GATEWAY_DSTACK_QUOTE_URL empty) so it fails closed
+# (503) as designed; the CVM's attestation is verified out-of-band via `phala cvms attestation`
+# + dcap-qvl until the in-CVM dstack quote endpoint is wired.
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:-ghcr.io/joshbilson/caladon-gateway:gate1}
+    restart: unless-stopped
+    environment:
+      GATEWAY_RUN_MODE: cvm
+      GATEWAY_ACCOUNTS_STORE: /data/accounts.json
+      GATEWAY_TRANSCRIPT_STORE: /data/transcripts.json
+      GATEWAY_DSTACK_QUOTE_URL: ""   # unset -> /v1/attestation fails closed (503), by design
+    ports:
+      - "8088:8088"
+    volumes:
+      - gwdata:/data
+
+volumes:
+  gwdata:

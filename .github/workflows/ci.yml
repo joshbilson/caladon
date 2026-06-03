@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-tests:
+    name: gateway unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "gateway/uv.lock"
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Run gateway tests (dev extras)
+        working-directory: gateway
+        # `uv run --extra dev` provisions a venv from gateway/pyproject.toml +
+        # uv.lock (incl. the dev extra: pytest, pytest-asyncio, ruff) and runs.
+        run: uv run --python 3.12 --extra dev pytest -q
+
+  leak-tests:
+    name: leak + contract suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # claims-lint walks `git ls-files`; a shallow checkout is fine since it
+          # only inspects the working tree, but we fetch all tracked files (the
+          # default depth-1 checkout already provides every tracked file).
+          fetch-depth: 1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Run root suites (leak + skipped contract specs)
+        # Pure-Python; no gateway deps. Skipped/xfail contract tests (crypto,
+        # attestation) collect cleanly via importorskip until their impls land.
+        run: uv run --python 3.12 --with pytest --with pyyaml --with pynacl --with cryptography pytest tests/ -q
+
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Run ruff (conservative ruleset; see [tool.ruff] in pyproject.toml)
+        run: uv run --with ruff ruff check .
+
+  swift-tests:
+    name: SwiftyKit (apple) tests
+    runs-on: macos-latest  # Swift + CryptoKit (Apple SDK) — not available on ubuntu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # The Apple Rust targets the xcframework build script builds + lipo's together
+          # (device, arm64+x86_64 simulator, arm64+x86_64 macOS).
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            caladon-core/target
+          key: ${{ runner.os }}-cargo-caladon-apple-${{ hashFiles('caladon-core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-caladon-apple-
+      - name: Build caladon-core UniFFI xcframework
+        # SwiftyKit thin-wraps the shared Rust trust-core via this xcframework; it is a
+        # gitignored build artifact, so CI builds it (+ regenerates the Swift binding) before
+        # `swift test`. Idempotent.
+        run: apple/scripts/build-caladon-core-xcframework.sh
+      - name: swift test
+        working-directory: apple
+        run: swift test
+
+  app-build:
+    name: SwiftyApp build (iOS sim + macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            caladon-core/target
+          key: ${{ runner.os }}-cargo-caladon-apple-${{ hashFiles('caladon-core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-caladon-apple-
+      - name: Build caladon-core UniFFI xcframework
+        # SwiftyKit's binaryTarget points at this gitignored xcframework; the app links
+        # SwiftyKit, so the artifact must exist before SwiftPM resolves the project.
+        run: apple/scripts/build-caladon-core-xcframework.sh
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: apple/SwiftyApp
+        run: xcodegen generate
+      - name: Build iOS (generic simulator, unsigned)
+        working-directory: apple/SwiftyApp
+        run: >-
+          xcodebuild -project SwiftyApp.xcodeproj -scheme SwiftyApp_iOS
+          -destination 'generic/platform=iOS Simulator' -configuration Debug
+          CODE_SIGNING_ALLOWED=NO build
+      - name: Build macOS (unsigned)
+        working-directory: apple/SwiftyApp
+        run: >-
+          xcodebuild -project SwiftyApp.xcodeproj -scheme SwiftyApp_macOS
+          -destination 'platform=macOS' -configuration Debug
+          CODE_SIGNING_ALLOWED=NO build
+
+  caladon-core:
+    name: caladon-core (rust crypto core + byte-parity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable) + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            caladon-core/target
+          key: ${{ runner.os }}-cargo-caladon-${{ hashFiles('caladon-core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-caladon-
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Install Python 3.12
+        run: uv python install 3.12
+      - name: Regenerate byte-parity vectors from the Python reference oracle
+        # The Python swifty_crypto reference is the oracle; this regenerates
+        # tests/vectors.json so the Rust suite asserts byte-identical output.
+        # Run from repo root with PYTHONPATH=. so swifty_crypto imports resolve.
+        run: >-
+          PYTHONPATH=. uv run --python 3.12 --with pynacl --with cryptography
+          python caladon-core/tests/generate_vectors.py
+      - name: cargo test (parity + attestation)
+        working-directory: caladon-core
+        # --features std adds the dcap-qvl attestation tests (offline, vs the committed PCS
+        # collateral fixture) + the serde wire-code test, on top of the 17 byte-parity tests.
+        run: cargo test --features std
+      - name: cargo build (wasm32 target, wasm feature) — BLOCKING
+        working-directory: caladon-core
+        # P3's `wasm` feature has landed; the full dcap-qvl verify path compiles to wasm32
+        # (rustcrypto backend, networking omitted). This step GATES — a wasm regression fails CI.
+        run: cargo build --target wasm32-unknown-unknown --features wasm

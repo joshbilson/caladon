@@ -1,0 +1,233 @@
+{
+  "_comment": "OBSERVED serving-enclave identities for the keep-warm phala/ slugs, collected live from RedPill GET /v1/attestation/report. PROPOSED allowlist below; set the two GATEWAY_ envs on the CVM to flip the receipt OBSERVE -> ENFORCE. See README.md. NEVER contains the RedPill key.",
+  "schema_version": 2,
+  "collected": {
+    "started_utc": "2026-06-03T10:20:10.429402+00:00",
+    "finished_utc": "2026-06-03T10:21:46.938803+00:00",
+    "rounds": 6,
+    "sleep_seconds": 2.0,
+    "endpoint": "GET https://api.redpill.ai/v1/attestation/report?model=<slug>",
+    "total_successful_samples": 18,
+    "key_source": "op://$OP_VAULT/redpill.ai/api_key (resolved at runtime, never stored)"
+  },
+  "models": {
+    "phala/qwen3.6-35b-a3b-uncensored": {
+      "samples": 6,
+      "errors": {},
+      "schemas_seen": {
+        "phala": 6
+      },
+      "providers_seen": {
+        "phala": 6
+      },
+      "distinct_enclaves": 1,
+      "enforceable_app_ids": [
+        "9d31963336e6b0bdf8ba4c27b97442a818dd05fd"
+      ],
+      "enclaves": [
+        {
+          "app_id": "9d31963336e6b0bdf8ba4c27b97442a818dd05fd",
+          "compose_hash": "537b750f6e99972db6d6ea24232ecf0c5826136f3e32704ad2936de75fca14a1",
+          "instance_id": null,
+          "schema": "phala/all_attestations",
+          "role": "model-serving",
+          "enforceable": true,
+          "app_names": [],
+          "signing_addresses": {
+            "0x4c4E5E69FAdffB8e55C306d867dc88792bd3221D": 12
+          },
+          "providers": [
+            "phala"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 12
+        }
+      ]
+    },
+    "phala/qwen3-30b-a3b-instruct-2507": {
+      "samples": 6,
+      "errors": {},
+      "schemas_seen": {
+        "near-ai": 6
+      },
+      "providers_seen": {
+        "near-ai": 6
+      },
+      "distinct_enclaves": 2,
+      "enforceable_app_ids": [
+        "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b"
+      ],
+      "enclaves": [
+        {
+          "app_id": "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b",
+          "compose_hash": "bcbccccf457a8f2dcd837b615ef56f63eaa707e3675f1ecd08ee81cb06ec2b28",
+          "instance_id": null,
+          "schema": "near-ai/model",
+          "role": "model-serving",
+          "enforceable": true,
+          "app_names": [
+            "dstack-nvidia-0.5.5"
+          ],
+          "signing_addresses": {
+            "0xc03b0cfc81531eb9cffca4c65aabfaf9b181ac63": 6
+          },
+          "providers": [
+            "near-ai"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        },
+        {
+          "app_id": "f550fdfb4eb8ad787c1bcd423f091cbb4a4431ae",
+          "compose_hash": "00a2639fb294b0ade5fa2047c2873f273f96680bb505103cf99ec97ca5047bbe",
+          "instance_id": null,
+          "schema": "near-ai/gateway",
+          "role": "gateway-relay",
+          "enforceable": true,
+          "app_names": [
+            "dstack-0.5.4"
+          ],
+          "signing_addresses": {
+            "cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6": 6
+          },
+          "providers": [
+            "near-ai"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        }
+      ]
+    },
+    "phala/deepseek-v3.2": {
+      "samples": 6,
+      "errors": {},
+      "schemas_seen": {
+        "chutes": 6
+      },
+      "providers_seen": {
+        "(none)": 6
+      },
+      "distinct_enclaves": 5,
+      "enforceable_app_ids": [],
+      "enclaves": [
+        {
+          "app_id": null,
+          "compose_hash": null,
+          "instance_id": "aeed138d-bf1b-4d3e-b80c-008f11424a89",
+          "schema": "chutes",
+          "role": "model-serving",
+          "enforceable": false,
+          "app_names": [],
+          "signing_addresses": {},
+          "providers": [
+            "(none)"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        },
+        {
+          "app_id": null,
+          "compose_hash": null,
+          "instance_id": "ebc94403-f1de-44a8-ba6f-d32574f2ef05",
+          "schema": "chutes",
+          "role": "model-serving",
+          "enforceable": false,
+          "app_names": [],
+          "signing_addresses": {},
+          "providers": [
+            "(none)"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        },
+        {
+          "app_id": null,
+          "compose_hash": null,
+          "instance_id": "dc1e7c37-cdfd-4547-9eb5-8660cc764ee5",
+          "schema": "chutes",
+          "role": "model-serving",
+          "enforceable": false,
+          "app_names": [],
+          "signing_addresses": {},
+          "providers": [
+            "(none)"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        },
+        {
+          "app_id": null,
+          "compose_hash": null,
+          "instance_id": "8a0bc90e-05ad-4175-be58-f197dd854755",
+          "schema": "chutes",
+          "role": "model-serving",
+          "enforceable": false,
+          "app_names": [],
+          "signing_addresses": {},
+          "providers": [
+            "(none)"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        },
+        {
+          "app_id": null,
+          "compose_hash": null,
+          "instance_id": "1c154e71-4e59-4670-9dc3-1fbadb7b2fdc",
+          "schema": "chutes",
+          "role": "model-serving",
+          "enforceable": false,
+          "app_names": [],
+          "signing_addresses": {},
+          "providers": [
+            "(none)"
+          ],
+          "no_log_observed": [
+            "unknown"
+          ],
+          "quote_present": true,
+          "times_seen": 6
+        }
+      ]
+    }
+  },
+  "no_log_summary": {
+    "any_enclave_asserted_no_log": false,
+    "note": "MEASURED: RedPill's /v1/attestation/report does NOT expose a `no_log` field in ANY of the three schemas (phala flat / near-ai nested / chutes nested). The gateway ENFORCE gate fails a turn CLOSED unless no_log is explicitly true, so enabling enforcement TODAY would reject every turn. Enforcement is therefore BLOCKED on either (a) RedPill asserting no_log in the report, or (b) relaxing the no_log gate to a non-blocking observation (a policy decision \u2014 do NOT silently drop a confidentiality claim). See README.md 'Blockers'."
+  },
+  "unenforceable_routes": [
+    {
+      "model": "phala/deepseek-v3.2",
+      "schemas_seen": {
+        "chutes": 6
+      },
+      "reason": "no app_id / compose_hash in any served attestation (e.g. chutes schema)"
+    }
+  ],
+  "proposed_allowlist": {
+    "GATEWAY_INFERENCE_ALLOWED_APP_IDS": "2c0a0c96cb6dbd659bf1446e2f3fce58172ff91b,9d31963336e6b0bdf8ba4c27b97442a818dd05fd",
+    "GATEWAY_INFERENCE_ALLOWED_COMPOSE_HASHES": "537b750f6e99972db6d6ea24232ecf0c5826136f3e32704ad2936de75fca14a1,bcbccccf457a8f2dcd837b615ef56f63eaa707e3675f1ecd08ee81cb06ec2b28",
+    "note": "AGGREGATE across all keep-warm slugs (RedPill load-balances, so one slug can hit several enclaves / providers). Setting EITHER env on the CVM flips the gateway to ENFORCE (gateway/app/config.py:receipt_enforce). PARTIAL: only the phala + near-ai routes expose app_id/compose_hash; the chutes route (deepseek-v3.2) does not and cannot be pinned this way (see unenforceable_routes). Review against the on-chain DstackApp registry + docs/security/measurements.md BEFORE enforcing. Re-run this collector periodically; RedPill may rotate enclaves."
+  }
+}

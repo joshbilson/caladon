@@ -1,0 +1,130 @@
+[package]
+name = "caladon-core"
+version = "0.1.0"
+edition = "2021"
+description = "Caladon shared trust-core: seed identity, sealed channel, attestation. Compiles to WASM (web fork) + a UniFFI xcframework (native Swift). The Python swifty_crypto reference is the byte-parity oracle."
+license = "Apache-2.0"
+build = "build.rs"
+
+# P1 = the crypto core + byte-parity vs the Python reference.
+# P3 (this slice) = the dcap-qvl attestation module + wasm-bindgen + UniFFI bindings.
+#
+# Feature map (see src/attestation/mod.rs spike comment + internal spike notes):
+#   (default)        pure-crypto P1 core, no attestation, no bindings — the parity gate.
+#   std              native attestation: dcap-qvl rustcrypto verify + reqwest collateral fetch.
+#   wasm             wasm32-unknown-unknown: dcap-qvl rustcrypto verify (NO ring asm, NO networking)
+#                    + wasm-bindgen + getrandom 'js'. Collateral is FETCHED BY JS and passed in.
+#   uniffi-bindings  UniFFI scaffolding for the native Swift xcframework.
+#
+# CRITICAL (R2 spike): dcap-qvl's `ring` backend uses assembly and does NOT link on
+# wasm32-unknown-unknown. The wasm build therefore pins the pure-Rust `rustcrypto` backend
+# (sha2 + p256 + signature) and EXCLUDES the `report` feature (reqwest networking).
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+argon2 = "0.5"        # Argon2id v1.3 — must byte-match libsodium crypto_pwhash (see kdf.rs CRITICAL notes)
+hkdf = "0.12"
+sha2 = "0.10"
+ed25519-dalek = "2"
+base64 = "0.22"
+zeroize = "1"
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hex = "0.4"
+
+# --- Attestation (P3) ---
+# Default (parity-gate) build pulls in NONE of these; they ride on the std/wasm features.
+#
+# Native (std) AND wasm use the SAME pure-Rust `rustcrypto` verify backend (not `ring`), so
+# there is ONE audited verification code path with no asm/JIT divergence between targets.
+[dependencies.dcap-qvl]
+version = "0.5"
+default-features = false
+optional = true
+
+# WASM bindings
+[dependencies.wasm-bindgen]
+version = "0.2"
+optional = true
+
+[dependencies.getrandom]
+version = "0.2"
+optional = true
+
+[dependencies.serde-wasm-bindgen]
+version = "0.6"
+optional = true
+
+# UniFFI bindings (native Swift xcframework)
+[dependencies.uniffi]
+version = "0.28"
+optional = true
+
+# serde/serde_json power the attestation Verdict (de)serialization across the FFI boundary
+# and the dstack `info` JSON parse. Pulled in only on the binding/attestation features.
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+optional = true
+
+[dependencies.serde_json]
+version = "1"
+optional = true
+
+[features]
+default = []
+
+# Native attestation: pure-Rust verify (rustcrypto) + std + async collateral fetch (reqwest).
+std = [
+    "dep:dcap-qvl",
+    "dcap-qvl/std",
+    "dcap-qvl/rustcrypto",
+    "dcap-qvl/default-x509",
+    "dcap-qvl/report",
+    "dep:serde",
+    "dep:serde_json",
+]
+
+# wasm32-unknown-unknown: pure-Rust verify (rustcrypto), NO networking (no `report`/reqwest),
+# NO ring (asm won't link). Collateral JSON is fetched by JS and passed into verify_quote_sync.
+#
+# NOTE (R2 spike): dcap-qvl 0.5.2 does NOT build no_std on wasm32 — without `std` its `anyhow`
+# loses the `Context`/`StdError`/`ToString` impls the verify path uses (39 compile errors). But
+# `std` IS available on wasm32-unknown-unknown (only the `report`/reqwest networking is not), so
+# we enable `dcap-qvl/std` and simply OMIT `report`. Pure-Rust crypto, no networking.
+wasm = [
+    "dep:dcap-qvl",
+    "dcap-qvl/std",
+    "dcap-qvl/rustcrypto",
+    "dcap-qvl/default-x509",
+    "dep:wasm-bindgen",
+    "dep:serde-wasm-bindgen",
+    "dep:getrandom",
+    "getrandom/js",
+    "dep:serde",
+    "dep:serde_json",
+]
+
+uniffi-bindings = [
+    "dep:uniffi",
+    "dep:dcap-qvl",
+    "dcap-qvl/std",
+    "dcap-qvl/rustcrypto",
+    "dcap-qvl/default-x509",
+    "dcap-qvl/report",
+    "dep:serde",
+    "dep:serde_json",
+]
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+# Only used by examples/fetch_fixture.rs (the dev tool that fetches the collateral fixture).
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[[example]]
+name = "fetch_fixture"
+required-features = ["std"]

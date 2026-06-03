@@ -1,0 +1,72 @@
+# T0 self-host tier (docs/deployment-tiers.md) — plain commodity VPS, NO TEE.
+#
+# For self-hosters where operator == user: there is no remote operator to attest, so the
+# expensive TEE is unnecessary. Confidentiality rests on client-side encryption + the user
+# trusting their own box. Same containers as the CVM compose, but run_mode=plain, host
+# ports bound to localhost, and inference can be BYO (local Ollama / any OpenAI-compatible
+# endpoint). The client must explicitly opt into `trusted-self-host` to talk to a T0
+# deployment (contracts/gateway-api.md §5). `docker compose -f t0-plain.yml up` on any VPS.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../postgres-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:5432:5432"   # localhost-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  embeddings:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+
+  letta:
+    image: letta/letta:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embeddings:
+        condition: service_started
+    environment:
+      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      OLLAMA_BASE_URL: http://embeddings:11434
+      OPENAI_API_BASE: ${INFERENCE_BASE}   # BYO: local or any OpenAI-compatible endpoint
+      OPENAI_API_KEY: ${INFERENCE_KEY}
+      SECURE: "true"
+      LETTA_SERVER_PASSWORD: ${LETTA_SERVER_PASSWORD}
+    ports:
+      - "127.0.0.1:8283:8283"   # localhost-only
+
+  gateway:
+    build: ../../gateway
+    restart: unless-stopped
+    depends_on:
+      - letta
+    environment:
+      GATEWAY_RUN_MODE: plain
+      GATEWAY_LETTA_BASE_URL: http://letta:8283
+      GATEWAY_LETTA_PASSWORD: ${LETTA_SERVER_PASSWORD}
+      GATEWAY_ACCOUNTS_STORE: /data/accounts.json
+    ports:
+      - "127.0.0.1:8088:8088"   # localhost-only; front with the user's own TLS/tunnel
+    volumes:
+      - gwdata:/data
+
+volumes:
+  pgdata:
+  ollama:
+  gwdata:

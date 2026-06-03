@@ -1,0 +1,5 @@
+# Throwaway build artifacts produced by the reproducible-build scripts.
+# The .sha256 / .SHA256SUMS RECORDS under out/ are the load-bearing published hashes
+# and MAY be committed (they feed the transparency log) — so do NOT ignore them.
+out/*.oci.tar
+out/Dockerfile.pinned

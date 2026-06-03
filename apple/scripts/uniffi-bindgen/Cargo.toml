@@ -1,0 +1,25 @@
+# Standalone uniffi-bindgen CLI, version-pinned to caladon-core's `uniffi` (0.28.3).
+#
+# WHY a tiny helper crate instead of `cargo install uniffi-bindgen-cli` or a `[[bin]]` in
+# caladon-core:
+#   - caladon-core uses UniFFI PROC-MACRO mode (`setup_scaffolding!`), so bindings are generated
+#     in *library mode* from the compiled .a/.dylib — which needs a `uniffi-bindgen` binary whose
+#     version EXACTLY matches the `uniffi` the library was built with (0.28.3). A floating
+#     `cargo install` can drift; this pins it.
+#   - The task forbids editing caladon-core, so we cannot add a `[[bin]]` there.
+#   - The `uniffi` crate exposes `uniffi::uniffi_bindgen_main()` behind its `cli` feature but ships
+#     no binary target of its own, so this 6-line wrapper provides one.
+#
+# This is a standalone crate (its own lockfile), not part of the caladon-core or apple builds.
+[package]
+name = "caladon-uniffi-bindgen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "main.rs"
+
+[dependencies]
+uniffi = { version = "=0.28.3", features = ["cli"] }

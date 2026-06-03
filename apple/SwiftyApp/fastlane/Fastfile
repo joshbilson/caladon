@@ -1,0 +1,36 @@
+# Swifty TestFlight delivery (DoD #1). Auth via an App Store Connect API key (.p8) — no
+# Apple-ID password, CI-friendly. Run through ../testflight.sh, which loads creds from
+# 1Password (op://$OP_VAULT/appstore/*) into the env. The .xcodeproj is XcodeGen-generated.
+default_platform(:ios)
+
+platform :ios do
+  desc "Compile-check the app for the iOS simulator (no signing). Safe to run anytime."
+  lane :build do
+    sh("cd .. && xcodegen generate")
+    sh("cd .. && xcodebuild -project SwiftyApp.xcodeproj -scheme SwiftyApp_iOS " \
+       "-destination 'generic/platform=iOS Simulator' -configuration Debug " \
+       "CODE_SIGNING_ALLOWED=NO build")
+  end
+
+  desc "Archive + upload to TestFlight. Requires B-APPLE: the ASC API key .p8 + a real " \
+       "team_id + bundle_id (see ../README-testflight.md)."
+  lane :beta do
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_KEY_P8"),   # the .p8 file contents
+      is_key_content_base64: false,
+      in_house: false
+    )
+    sh("cd .. && xcodegen generate")
+    # First run creates the distribution cert + provisioning profile via the API key.
+    sync_code_signing(type: "appstore", api_key: api_key, readonly: false) if ENV["SWIFTY_USE_MATCH"]
+    build_app(
+      project: "SwiftyApp.xcodeproj",
+      scheme: "SwiftyApp_iOS",
+      export_method: "app-store",
+      xcargs: "-allowProvisioningUpdates"
+    )
+    upload_to_testflight(api_key: api_key, skip_waiting_for_build_processing: true)
+  end
+end

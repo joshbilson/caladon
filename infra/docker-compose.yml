@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro   # enables pgvector on first init
+    ports:
+      - "127.0.0.1:5432:5432"   # localhost-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  letta:
+    image: letta/letta:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LETTA_PG_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      VLLM_API_BASE: ${VLLM_API_BASE}      # chat -> llama.cpp llama-server
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}  # embeddings -> Ollama
+      SECURE: "true"
+      LETTA_SERVER_PASSWORD: ${LETTA_SERVER_PASSWORD}
+    ports:
+      - "127.0.0.1:8283:8283"   # localhost-only; gateway will proxy this (M1b)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  gateway:
+    build: ../gateway
+    restart: unless-stopped
+    depends_on:
+      - letta
+    environment:
+      GATEWAY_LETTA_BASE_URL: http://letta:8283
+      GATEWAY_LETTA_PASSWORD: ${LETTA_SERVER_PASSWORD}
+      GATEWAY_AGENT_ID: ${SWIFTY_AGENT_ID}
+      GATEWAY_DEVICE_TOKENS: ${GATEWAY_DEVICE_TOKENS}
+    ports:
+      - "127.0.0.1:8088:8088"   # localhost only; tailscale serve bridges to the tailnet
+
+volumes:
+  pgdata:

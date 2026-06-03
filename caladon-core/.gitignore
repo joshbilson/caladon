@@ -1,0 +1,3 @@
+/target
+/pkg
+# Cargo.lock IS tracked — caladon-core ships verifiable/reproducible builds (Apple-PCC #5).

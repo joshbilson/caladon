@@ -1,0 +1,4 @@
+module caladon_coreFFI {
+    header "caladon_coreFFI.h"
+    export *
+}

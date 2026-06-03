@@ -1,0 +1,11 @@
+# caladon-core WASM reproducible-build record
+# generated: 2026-06-03T10:40:17Z (UTC)
+artifact:        caladon-core/pkg/caladon_core_bg.wasm
+sha256:          78dcb312ff39477d51d87a4d113bb27001ec5bd842cbf02c6831956c005ccf79
+bytes:           1184853
+rust-toolchain:  1.96.0
+wasm-pack:       0.15.0
+target:          wasm32-unknown-unknown
+features:        wasm (no-default-features)
+source-ref:      cb3704c
+SOURCE_DATE_EPOCH: 0
