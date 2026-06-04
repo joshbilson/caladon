@@ -110,6 +110,15 @@ pub fn wmk(root: &[u8]) -> Vec<u8> {
     kdf::derive_wmk(root)
 }
 
+/// The device-local encrypted store key (32 bytes) for the client's SQLite/SQLCipher store
+/// (history + RAG + FTS) — Batch-1 client foundation. Derived from the root; NEVER leaves the
+/// device. Single source of truth (the native client uses the UniFFI export of the same kdf fn),
+/// so the key is byte-identical and never re-implemented in JS/Swift (avoids an HKDF salt drift).
+#[wasm_bindgen]
+pub fn device_store_key(root: &[u8]) -> Vec<u8> {
+    kdf::derive_device_store_key(root)
+}
+
 /// Build the `Authorization: Swifty acct=.. ts=.. sig=..` header for a request, signing with the
 /// seed-derived Ed25519 key. Every signed gateway call uses this (the web client cannot reach the
 /// gateway without it). Fails closed on a malformed account_id.

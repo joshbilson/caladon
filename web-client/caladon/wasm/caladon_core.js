@@ -129,6 +129,23 @@ export function derive_session_key(my_private, their_public, client_pub, cvm_pub
 }
 
 /**
+ * The device-local encrypted store key (32 bytes) for the client's SQLite/SQLCipher store
+ * (history + RAG + FTS) — Batch-1 client foundation. Derived from the root; NEVER leaves the
+ * device. Single source of truth (the native client uses the UniFFI export of the same kdf fn),
+ * so the key is byte-identical and never re-implemented in JS/Swift (avoids an HKDF salt drift).
+ * @param {Uint8Array} root
+ * @returns {Uint8Array}
+ */
+export function device_store_key(root) {
+    const ptr0 = passArray8ToWasm0(root, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.device_store_key(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * Raw Ed25519 public key (32 bytes) for gateway onboarding proof-of-possession (POST /v1/accounts):
  * the gateway checks the PoP signature + that account_id == key-bound(pub). Lets the web client
  * self-onboard a fresh identity (account_id alone is one-way, so the raw pub must be exported).

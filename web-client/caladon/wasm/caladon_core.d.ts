@@ -31,6 +31,14 @@ export function challenge_hex(eph_pub: Uint8Array): string;
 export function derive_session_key(my_private: Uint8Array, their_public: Uint8Array, client_pub: Uint8Array, cvm_pub: Uint8Array): Uint8Array;
 
 /**
+ * The device-local encrypted store key (32 bytes) for the client's SQLite/SQLCipher store
+ * (history + RAG + FTS) — Batch-1 client foundation. Derived from the root; NEVER leaves the
+ * device. Single source of truth (the native client uses the UniFFI export of the same kdf fn),
+ * so the key is byte-identical and never re-implemented in JS/Swift (avoids an HKDF salt drift).
+ */
+export function device_store_key(root: Uint8Array): Uint8Array;
+
+/**
  * Raw Ed25519 public key (32 bytes) for gateway onboarding proof-of-possession (POST /v1/accounts):
  * the gateway checks the PoP signature + that account_id == key-bound(pub). Lets the web client
  * self-onboard a fresh identity (account_id alone is one-way, so the raw pub must be exported).
@@ -131,6 +139,7 @@ export interface InitOutput {
     readonly authorization_header: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number, i: number) => [number, number, number, number];
     readonly challenge_hex: (a: number, b: number) => [number, number];
     readonly derive_session_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly device_store_key: (a: number, b: number) => [number, number];
     readonly ed25519_public: (a: number, b: number) => [number, number];
     readonly open_chat: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint) => [number, number, number, number];
     readonly open_wmk: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint) => [number, number, number, number];

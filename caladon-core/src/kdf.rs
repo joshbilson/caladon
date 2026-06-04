@@ -31,6 +31,9 @@ pub const WMK_LABEL: &str = "swifty/working-mem/v1";
 pub const TRANSCRIPT_LABEL: &str = "swifty/transcript/v1";
 pub const GATEWAY_AUTH_LABEL: &str = "swifty/gateway-auth/v1";
 pub const CODING_LABEL: &str = "swifty/coding/v1";
+/// Device-local encrypted store (SQLite/SQLCipher `PRAGMA key`) — Batch-1 client store. New label
+/// (no existing derivations), so it uses the forward `caladon/` brand. NEVER leaves the device.
+pub const DEVICE_STORE_LABEL: &str = "caladon/device-store/v1";
 
 const ACCOUNT_ID_DOMAIN: &[u8] = b"swifty/account/v1";
 
@@ -84,6 +87,13 @@ pub fn derive_wmk(root: &[u8]) -> Vec<u8> {
 
 pub fn derive_transcript_root(root: &[u8]) -> Vec<u8> {
     hkdf(root, TRANSCRIPT_LABEL, KEY_LEN)
+}
+
+/// The device-local store key (32 bytes) for the client's encrypted SQLite store (history + RAG +
+/// FTS search). Single source of truth — both the WASM (web) and UniFFI (native) clients call this
+/// so the key is byte-identical and never re-implemented in JS/Swift. Stays on the device.
+pub fn derive_device_store_key(root: &[u8]) -> Vec<u8> {
+    hkdf(root, DEVICE_STORE_LABEL, KEY_LEN)
 }
 
 /// The Ed25519 *public* key (32 bytes) for gateway seed-auth, derived from the root.

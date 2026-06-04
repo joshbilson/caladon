@@ -6,6 +6,7 @@ export const argon2id: (a: number, b: number, c: number, d: number, e: number, f
 export const authorization_header: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const challenge_hex: (a: number, b: number) => [number, number];
 export const derive_session_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const device_store_key: (a: number, b: number) => [number, number];
 export const ed25519_public: (a: number, b: number) => [number, number];
 export const open_chat: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint) => [number, number, number, number];
 export const open_wmk: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint) => [number, number, number, number];
