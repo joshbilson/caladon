@@ -18,7 +18,7 @@ export const seal_wmk: (a: number, b: number, c: number, d: number, e: number, f
 export const seed_decode: (a: number, b: number) => [number, number, number, number];
 export const seed_encode: (a: number, b: number) => [number, number, number, number];
 export const unpad: (a: number, b: number) => [number, number, number, number];
-export const verify_quote_sync: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number) => [number, number, number];
+export const verify_quote_sync: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number];
 export const wmk: (a: number, b: number) => [number, number];
 export const x25519_public: (a: number, b: number) => [number, number, number, number];
 export const __wbindgen_malloc: (a: number, b: number) => number;

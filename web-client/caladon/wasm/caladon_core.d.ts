@@ -103,10 +103,14 @@ export function unpad(padded: Uint8Array): Uint8Array;
  *
  * `pinned_json` is `{ "measurements": [...], "compose_hashes": [...], "workload_ids": [...] }`
  * (the client-shipped pin list; no TOFU). `collateral_json` is the PCS collateral JSON the JS
- * host fetched. Never throws on a verification FAILURE — it returns a failing `Verdict` so the
- * caller can branch on the specific reason; it only throws if `pinned_json` is unparseable.
+ * host fetched. `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the §4.6 client
+ * binding); `expected_session_pub` is the RAW 32-byte CVM X25519 session pubkey (the JS host
+ * base64-decodes `ev.session_pub`) — §4.6b checks report_data[32:64] == SHA-256(session_pub) so a
+ * relay cannot substitute its own session key. Never throws on a verification FAILURE — it returns
+ * a failing `Verdict` so the caller can branch on the specific reason; it only throws if
+ * `pinned_json` is unparseable.
  */
-export function verify_quote_sync(quote_bytes: Uint8Array, collateral_json: string, info_json: string, now_secs: bigint, expected_challenge_hex: string, pinned_json: string): any;
+export function verify_quote_sync(quote_bytes: Uint8Array, collateral_json: string, info_json: string, now_secs: bigint, expected_challenge_hex: string, expected_session_pub: Uint8Array, pinned_json: string): any;
 
 /**
  * The working-memory key (delivered into the CVM over the §6 session channel), from the root.
@@ -139,7 +143,7 @@ export interface InitOutput {
     readonly seed_decode: (a: number, b: number) => [number, number, number, number];
     readonly seed_encode: (a: number, b: number) => [number, number, number, number];
     readonly unpad: (a: number, b: number) => [number, number, number, number];
-    readonly verify_quote_sync: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number) => [number, number, number];
+    readonly verify_quote_sync: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number, number];
     readonly wmk: (a: number, b: number) => [number, number];
     readonly x25519_public: (a: number, b: number) => [number, number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;

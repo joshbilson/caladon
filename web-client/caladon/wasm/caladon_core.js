@@ -385,17 +385,22 @@ export function unpad(padded) {
  *
  * `pinned_json` is `{ "measurements": [...], "compose_hashes": [...], "workload_ids": [...] }`
  * (the client-shipped pin list; no TOFU). `collateral_json` is the PCS collateral JSON the JS
- * host fetched. Never throws on a verification FAILURE — it returns a failing `Verdict` so the
- * caller can branch on the specific reason; it only throws if `pinned_json` is unparseable.
+ * host fetched. `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the §4.6 client
+ * binding); `expected_session_pub` is the RAW 32-byte CVM X25519 session pubkey (the JS host
+ * base64-decodes `ev.session_pub`) — §4.6b checks report_data[32:64] == SHA-256(session_pub) so a
+ * relay cannot substitute its own session key. Never throws on a verification FAILURE — it returns
+ * a failing `Verdict` so the caller can branch on the specific reason; it only throws if
+ * `pinned_json` is unparseable.
  * @param {Uint8Array} quote_bytes
  * @param {string} collateral_json
  * @param {string} info_json
  * @param {bigint} now_secs
  * @param {string} expected_challenge_hex
+ * @param {Uint8Array} expected_session_pub
  * @param {string} pinned_json
  * @returns {any}
  */
-export function verify_quote_sync(quote_bytes, collateral_json, info_json, now_secs, expected_challenge_hex, pinned_json) {
+export function verify_quote_sync(quote_bytes, collateral_json, info_json, now_secs, expected_challenge_hex, expected_session_pub, pinned_json) {
     const ptr0 = passArray8ToWasm0(quote_bytes, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passStringToWasm0(collateral_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -404,9 +409,11 @@ export function verify_quote_sync(quote_bytes, collateral_json, info_json, now_s
     const len2 = WASM_VECTOR_LEN;
     const ptr3 = passStringToWasm0(expected_challenge_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passStringToWasm0(pinned_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr4 = passArray8ToWasm0(expected_session_pub, wasm.__wbindgen_malloc);
     const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.verify_quote_sync(ptr0, len0, ptr1, len1, ptr2, len2, now_secs, ptr3, len3, ptr4, len4);
+    const ptr5 = passStringToWasm0(pinned_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.verify_quote_sync(ptr0, len0, ptr1, len1, ptr2, len2, now_secs, ptr3, len3, ptr4, len4, ptr5, len5);
     if (ret[2]) {
         throw takeFromExternrefTable0(ret[1]);
     }
