@@ -58,8 +58,9 @@ services:
       # header verbatim (web-client/shim/src/proxy.ts); the gateway is the verifier + ciphertext router.
       CALADON_GATEWAY_BASE: http://gateway:8088
       # Serve the built SPA from inside the image; SPA history-mode falls back to index.html. The web
-      # image bakes the bundle at this path (DEPLOY.md §1). NO DB, NO keys: read-only file serving.
-      CALADON_STATIC_DIR: ${CALADON_STATIC_DIR:-/srv/spa}
+      # image bakes the bundle at this path (Dockerfile sets ENV CALADON_STATIC_DIR=/app/client-dist;
+      # this default MUST match it). NO DB, NO keys: read-only file serving.
+      CALADON_STATIC_DIR: ${CALADON_STATIC_DIR:-/app/client-dist}
       # The shim listens here; ingress targets it. Keep in lockstep with the expose/TARGET_ENDPOINT below.
       PORT: "8787"
       # CORS allowlist = the public origin only (the SPA is served same-origin so this is belt-and-braces).

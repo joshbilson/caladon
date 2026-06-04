@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
     environment:
       CALADON_GATEWAY_BASE: ${CALADON_GATEWAY_BASE:-https://gw.caladon.ai}
-      CALADON_STATIC_DIR: ${CALADON_STATIC_DIR:-/srv/spa}
+      CALADON_STATIC_DIR: ${CALADON_STATIC_DIR:-/app/client-dist}
       PORT: "8787"
       CALADON_ALLOWED_ORIGINS: ${CALADON_ALLOWED_ORIGINS:-https://app.caladon.ai}
       CALADON_COOKIE_SECURE: "true"

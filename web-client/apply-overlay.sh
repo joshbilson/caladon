@@ -38,9 +38,21 @@ else
   echo "==> Cloning LibreChat and checking out the pinned commit ${LIBRECHAT_COMMIT}"
   git clone "${LIBRECHAT_REPO}" "${LIBRECHAT_DIR}"
   if ! git -C "${LIBRECHAT_DIR}" checkout --quiet "${LIBRECHAT_COMMIT}" 2>/dev/null; then
-    echo "    WARNING: pinned commit ${LIBRECHAT_COMMIT} not found (upstream history rewritten?)."
-    echo "             Staying on the default branch HEAD: $(git -C "${LIBRECHAT_DIR}" rev-parse --short HEAD)"
-    echo "             Surgery line numbers in SURGERY.md may have drifted — re-verify."
+    # FAIL CLOSED. The pin is load-bearing for the trust model: upstream `main` ships a different
+    # chat/SSE flow that BYPASSES the sealed surgery, and the measured SPA must be built from the
+    # exact audited commit. Silently falling back to HEAD would produce an unaudited, unpinned bundle.
+    echo "ERROR: pinned LibreChat commit ${LIBRECHAT_COMMIT} could not be checked out" >&2
+    echo "       (upstream history rewritten or network/clone issue). Refusing to build from an" >&2
+    echo "       unpinned tree — the measured SPA must come from the exact pinned commit. Aborting." >&2
+    rm -rf "${LIBRECHAT_DIR}"
+    exit 1
+  fi
+  # Belt-and-braces: assert we landed on the exact pin.
+  ACTUAL_HEAD="$(git -C "${LIBRECHAT_DIR}" rev-parse HEAD)"
+  if [ "${ACTUAL_HEAD}" != "${LIBRECHAT_COMMIT}" ]; then
+    echo "ERROR: LibreChat HEAD ${ACTUAL_HEAD} != pinned ${LIBRECHAT_COMMIT}. Aborting." >&2
+    rm -rf "${LIBRECHAT_DIR}"
+    exit 1
   fi
 fi
 
