@@ -32,18 +32,24 @@
 # Stage A — WASM: build caladon-core → web-client/caladon/wasm/ (wasm-pack --target web).
 #   Rust stable + wasm32-unknown-unknown target + a pinned wasm-pack. Output ~948KB binary.
 # ==============================================================================
-FROM rust:1.90-bookworm@sha256:3f6e6f8d8725a65a2db964bb828850f888d430c68784d661f753144e5d787207 AS wasm
+# Build NATIVELY on the host arch ($BUILDPLATFORM), not the target: the output is wasm32
+# (arch-independent), so emulating amd64 here only wastes time + RAM (QEMU OOMs the npm/cargo
+# steps). wasm-pack's prebuilt musl binary is x86_64-only, so on an arm64 host the `||` in the
+# RUN below falls back to `cargo install wasm-pack` — correct + still reproducible wasm output.
+FROM --platform=$BUILDPLATFORM rust:1.90-bookworm@sha256:3f6e6f8d8725a65a2db964bb828850f888d430c68784d661f753144e5d787207 AS wasm
 
 # wasm32 target + pinned wasm-pack (matches the version that produced the proven build).
 ARG WASM_PACK_VERSION=0.15.0
+# Install wasm-pack for the BUILD HOST arch. The prebuilt release is x86_64-musl ONLY, so on an
+# arm64 host (native $BUILDPLATFORM build) we cargo-install instead — installing the x86_64 binary
+# would "succeed" here and only fail later with "exec format error" when build-wasm.sh runs it.
 RUN rustup target add wasm32-unknown-unknown \
- && curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-      -o /tmp/wasm-pack.tgz 2>/dev/null \
+ && if [ "$(uname -m)" = "x86_64" ]; then \
+      curl -fsSL "https://github.com/rustwasm/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/wasm-pack.tgz \
       && tar -xzf /tmp/wasm-pack.tgz -C /tmp \
       && install -m 0755 /tmp/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack /usr/local/cargo/bin/wasm-pack \
-      && rm -rf /tmp/wasm-pack* \
-   || cargo install wasm-pack --version "${WASM_PACK_VERSION}" --locked
-# (The prebuilt musl binary is x86_64-only; on arm64 the `||` falls back to `cargo install`.)
+      && rm -rf /tmp/wasm-pack* ; \
+    else cargo install wasm-pack --version "${WASM_PACK_VERSION}" --locked ; fi
 
 WORKDIR /build
 
@@ -68,7 +74,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #   Node 24 (matches LibreChat's .nvmrc 24.16.0; satisfies the "Node 22+" floor). git is needed
 #   by setup.sh's partial clone of the pinned commit d680763.
 # ==============================================================================
-FROM node:24.16.0-bookworm@sha256:bdcebf8f693f755ced9b881c5ad02a702cf0e2b73757c7d961df0076657dacc3 AS spa
+# Build the SPA NATIVELY on the host arch ($BUILDPLATFORM): npm install + vite build emit
+# arch-independent JS/static assets, so emulating amd64 here only invites the QEMU OOM that
+# kills `npm install`. Only the runtime stage (C) is pinned to the target (amd64) platform.
+FROM --platform=$BUILDPLATFORM node:24.16.0-bookworm@sha256:bdcebf8f693f755ced9b881c5ad02a702cf0e2b73757c7d961df0076657dacc3 AS spa
 
 # git: setup.sh does a `--filter=tree:0 --no-checkout` clone then checks out the pinned commit.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \

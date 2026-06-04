@@ -1,0 +1,60 @@
+# Caladon gateway v2 — the 24/7 attested CVM, NOW WITH THE SESSION_PUB ATTESTATION BINDING (CC-1).
+#
+# v2 closes the sealed-channel MITM: the gateway POSTs report_data = SHA-256(client eph_pub) ‖
+# SHA-256(cvm session_pub) to dstack /GetQuote, so the attested quote vouches for BOTH the client
+# ephemeral key (report_data[0:32]) AND the CVM X25519 session key (report_data[32:64]). The client
+# verifies report_data[32:64] == SHA-256(ev.session_pub) fail-closed BEFORE deriving SK, so a relay
+# can no longer substitute its own session_pub. (security review 2026-06-04 CC-1/ATT-1/GW-2.)
+#
+# Deployed as an IN-PLACE UPGRADE of the existing caladon-gw app (same app_id → dstack KMS preserves
+# the already-sealed env: GATEWAY_INFERENCE_KEY, CLOUDFLARE_API_TOKEN, CERTBOT_EMAIL). The image is
+# HARDCODED here (not ${GATEWAY_IMAGE}) so a stale sealed GATEWAY_IMAGE can't pin us back to gw-v1.
+# Changing this file changes the compose_hash → re-pin (docs/security/measurements.md); mr_td/rtmr0..2
+# and app_id are unchanged by an in-place upgrade, so only compose_hash moves.
+services:
+  gateway:
+    image: ghcr.io/joshbilson/caladon-gateway:gw-v2
+    restart: unless-stopped
+    environment:
+      GATEWAY_RUN_MODE: cvm
+      GATEWAY_ACCOUNTS_STORE: /data/accounts.json
+      GATEWAY_TRANSCRIPT_STORE: /data/transcripts.json
+      GATEWAY_DSTACK_QUOTE_URL: http://dstack/GetQuote
+      GATEWAY_INFERENCE_BASE: ${GATEWAY_INFERENCE_BASE:-https://api.redpill.ai/v1}
+      GATEWAY_INFERENCE_MODEL: ${GATEWAY_INFERENCE_MODEL:-phala/qwen3.6-35b-a3b-uncensored}
+      GATEWAY_INFERENCE_KEY: ${GATEWAY_INFERENCE_KEY}     # dstack-sealed (preserved on upgrade); never in the image/compose_hash
+      GATEWAY_KEEPWARM_MODELS: ${GATEWAY_KEEPWARM_MODELS:-phala/qwen3.6-35b-a3b-uncensored,phala/qwen3-30b-a3b-instruct-2507,phala/deepseek-v3.2}
+      GATEWAY_KEEPWARM_INTERVAL: ${GATEWAY_KEEPWARM_INTERVAL:-120}
+    expose:
+      - "8088"
+    ports:
+      - "8088:8088"   # dstack-gateway wildcard endpoint (cert in-CVM); the CVM has no direct NIC
+    volumes:
+      - gwdata:/data
+      - /var/run/dstack.sock:/var/run/dstack.sock         # in-CVM guest-agent quote/Info socket
+    logging:
+      driver: "none"   # no logging of request paths/metadata (plaintext-exposure map row 5)
+
+  # Custom-domain TLS terminating INSIDE the CVM (trust-no-one). Sees only sealed envelopes +
+  # seed-auth headers (never plaintext prompts); the CAA record locks cert issuance to this TEE.
+  dstack-ingress:
+    image: dstacktee/dstack-ingress:20250924@sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "443:443"
+    environment:
+      DOMAIN: ${CALADON_DOMAIN:-gw.caladon.ai}
+      TARGET_ENDPOINT: http://gateway:8088
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}       # dstack-sealed (preserved on upgrade); Zone:DNS:Edit on caladon.ai
+      GATEWAY_DOMAIN: _.${DSTACK_GATEWAY_DOMAIN:-dstack-pha-prod5.phala.network}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-joshbilson@gmail.com}
+      SET_CAA: "true"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - cert-data:/etc/letsencrypt
+
+volumes:
+  gwdata:
+  cert-data:
