@@ -20,6 +20,9 @@ import {
   isUnlocked as caladonIsUnlocked,
   signRequest as caladonSignRequest,
 } from '~/lib/caladon';
+import { getStoreProxy, deriveStoreKeyHex } from '~/lib/store';
+import { warmupEmbedder, hydrateRagIndex, resetRagIndex } from '~/lib/rag/retrieval';
+import useConversationList from '~/store/useConversationList';
 import store from '~/store';
 
 /**
@@ -54,6 +57,11 @@ const AuthContextProvider = ({
     caladonIdentity()?.accountId,
   );
   const setQueriesEnabled = useSetRecoilState<boolean>(store.queriesEnabled);
+
+  // Seed the sidebar's `allConversations` cache from the on-device store. Self-gates on an
+  // unlocked session + an OPEN store and re-runs when `isAuthenticated` flips, so mounting it here
+  // (the always-present auth provider) is enough — unlock() opens the store before flipping auth.
+  useConversationList();
 
   const userRoleName = user?.role ?? '';
   const isCustomRole = isAuthenticated && !!user?.role && !isSystemRoleName(user.role);
@@ -92,6 +100,22 @@ const AuthContextProvider = ({
       const result = await caladonUnlock(seed);
       const account = result.identity.accountId;
       setAccountId(account);
+
+      // Open the on-device encrypted SQLite store with `device_store_key(root)` BEFORE we flip
+      // `isAuthenticated` (applyUserContext). The seeding hooks (useConversationList here,
+      // useHydrateConversation on the chat route) self-gate on `store.isOpen` and re-run when
+      // `isAuthenticated` changes — so the store must be open by the time auth flips for the first
+      // seed to land. `deriveStoreKeyHex(root)` reuses the wasm the handshake just initialised
+      // (the arg is ignored when already loaded); the raw key bytes are zeroed inside kdf.ts and
+      // the key never leaves the worker after INIT. We swallow store-open errors (e.g. OPFS
+      // unavailable falls back to an in-memory store inside the worker) so a store failure can
+      // never block establishing the attested chat session.
+      try {
+        await getStoreProxy().openStore(await deriveStoreKeyHex(result.identity.root));
+      } catch (storeErr) {
+        console.error('[caladon] device store open failed (history/RAG disabled this session):', storeErr);
+      }
+
       // The seed-derived identity IS the single local user. LibreChat gates the USER-role query
       // — and therefore conversation initialization in ChatRoute (`roles?.USER != null`) — on
       // `user?.role` being set, so we synthesize a local USER. Without a role the app authenticates
@@ -106,6 +130,15 @@ const AuthContextProvider = ({
         provider: 'caladon',
       } as unknown as t.TUser;
       applyUserContext({ isAuthenticated: true, user: caladonUser, redirect: '/c/new', token: undefined });
+
+      // RAG init — strictly non-blocking and OFF the unlock path's critical line. Warm the MiniLM
+      // embedder (so the first ingest/query isn't paying cold-start) and rebuild the in-memory
+      // cosine index from the persisted, encrypted vectors. Both are fire-and-forget: failures are
+      // swallowed inside the helpers and must never affect auth. (The sidebar/list seed is driven
+      // declaratively by `useConversationList()` mounted in this provider, which fires once auth
+      // flips and the store is open.)
+      void warmupEmbedder();
+      void hydrateRagIndex(true).catch(() => undefined);
     },
     [applyUserContext],
   );
@@ -113,6 +146,13 @@ const AuthContextProvider = ({
   const lock = useCallback(() => {
     caladonLock();
     setAccountId(undefined);
+    // Wipe the on-device store (logout / panic) and drop the in-memory RAG index. clearStore keeps
+    // the store open but empties every table; resetRagIndex drops the cosine matrix. Fire-and-forget
+    // so a store error can't wedge the lock/navigation.
+    void getStoreProxy()
+      .clearStore()
+      .catch((err) => console.error('[caladon] device store clear on lock failed:', err));
+    resetRagIndex();
     applyUserContext({ isAuthenticated: false, user: undefined, redirect: '/login', token: undefined });
   }, [applyUserContext]);
 
@@ -125,6 +165,11 @@ const AuthContextProvider = ({
     (redirect?: string) => {
       caladonLock();
       setAccountId(undefined);
+      // Same teardown as lock(): empty the encrypted store and drop the RAG index. Fire-and-forget.
+      void getStoreProxy()
+        .clearStore()
+        .catch((err) => console.error('[caladon] device store clear on logout failed:', err));
+      resetRagIndex();
       applyUserContext({
         isAuthenticated: false,
         user: undefined,

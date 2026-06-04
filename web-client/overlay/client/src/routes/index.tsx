@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet, useParams } from 'react-router-dom';
 import {
   VerifyEmail,
   Registration,
@@ -7,6 +7,7 @@ import {
   TwoFactorScreen,
   RequestPasswordReset,
 } from '~/components/Auth';
+import useHydrateConversation from '~/store/useHydrateConversation';
 import CaladonUnlock from '~/components/Auth/CaladonUnlock';
 import { MarketplaceProvider } from '~/components/Agents/MarketplaceContext';
 import AgentMarketplace from '~/components/Agents/Marketplace';
@@ -42,6 +43,20 @@ const AuthLayout = () => (
     <ApiErrorWatcher />
   </AuthContextProvider>
 );
+
+/**
+ * Caladon device-store hydration wrapper for the chat route. On a deep-link / hard reload to
+ * `/c/<id>`, the gateway has NO server-side message store, so the chat view restores its history
+ * from the on-device encrypted store. `useHydrateConversation` reads the `:conversationId` route
+ * param and — gated on an unlocked session + an open store, and only when the messages cache for
+ * that id is still empty — seeds it from `StoreProxy.hydrate(id)` (live state always wins). It
+ * renders `<ChatRoute/>` unchanged; the wrapper only adds the side effect.
+ */
+const StoreHydrationWrapper = () => {
+  const { conversationId } = useParams();
+  useHydrateConversation(conversationId);
+  return <ChatRoute />;
+};
 
 const loadInlinePromptsView = () =>
   import('~/components/Prompts/layouts/InlinePromptsView').then((m) => ({
@@ -130,7 +145,7 @@ export const router = createBrowserRouter(
             },
             {
               path: 'c/:conversationId?',
-              element: <ChatRoute />,
+              element: <StoreHydrationWrapper />,
             },
             {
               path: 'search',

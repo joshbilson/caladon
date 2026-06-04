@@ -175,9 +175,13 @@ app.get('/api/config', (c) =>
     sharedLinksEnabled: false,
     publicSharedLinksEnabled: false,
     allowAccountDeletion: false,
-    // Minimal interface: all fields optional in interfaceSchema; an empty object is valid and lets
-    // the SPA apply its own defaults.
-    interface: {},
+    // Interface flags (all optional in interfaceSchema). Two are turned ON for Caladon's
+    // device-side features — both are purely client-side and need no server backing:
+    //   - temporaryChat     — show the "temporary chat" toggle; a temporary convo is simply not
+    //                         persisted to the on-device store (useSSE skips persistTurn). Pairs
+    //                         with the TEMPORARY_CHAT.USE role permission above.
+    //   - autoSubmitFromUrl — allow a prompt passed in the URL to auto-submit on load.
+    interface: { temporaryChat: true, autoSubmitFromUrl: true },
   }),
 );
 
@@ -212,7 +216,10 @@ app.get('/api/roles/:role', (c) =>
       MEMORIES: { USE: false, CREATE: false, UPDATE: false, READ: false, OPT_OUT: false },
       AGENTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
       MULTI_CONVO: { USE: false },
-      TEMPORARY_CHAT: { USE: false },
+      // Enabled: temporary (non-persisted) chats are a device-side concept — a temporary
+      // conversation is simply not written to the on-device store (useSSE skips persistTurn when
+      // conversation.isTemporary). No server involvement, so it is safe to grant.
+      TEMPORARY_CHAT: { USE: true },
       RUN_CODE: { USE: false },
       WEB_SEARCH: { USE: false },
       PEOPLE_PICKER: { VIEW_USERS: false, VIEW_GROUPS: false, VIEW_ROLES: false },
@@ -330,10 +337,12 @@ app.get('/api/agents/chat/active', (c) => c.json({ activeJobIds: [] }));
 app.get('/api/files', (c) => c.json([]));
 
 /**
- * GET /api/search/enable → boolean (getSearchEnabled). Conversation search is a server-DB feature
- * the shim cannot back, so it is disabled.
+ * GET /api/search/enable → boolean (getSearchEnabled). ENABLED in Caladon: conversation search is
+ * served ENTIRELY on-device by the encrypted store's FTS5 index (StoreProxy.search), NOT by a
+ * server DB / Meilisearch. Returning `true` lights up the search UI; the search itself never hits
+ * the network — the gateway has no message store and the shim holds nothing.
  */
-app.get('/api/search/enable', (c) => c.json(false));
+app.get('/api/search/enable', (c) => c.json(true));
 
 /* ---------------------------------------------------------------------------------------------
  * Static SPA front door (G3). Only when CALADON_STATIC_DIR is set (prod / single-origin deploy).
@@ -424,6 +433,19 @@ const setSecurityHeaders = (c: Context): void => {
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'no-referrer');
   c.header('X-Frame-Options', 'DENY');
+  // Cross-origin isolation — REQUIRED so the on-device store can use OPFS persistence. The
+  // @sqlite.org/sqlite-wasm OPFS VFS only works in a cross-origin-isolated context, which needs
+  // BOTH of these headers. This is SAFE for the trust model precisely because everything the SPA
+  // loads is same-origin: the bundle, the caladon-core WASM, the MiniLM model (served from
+  // /models/), the embed/store workers, AND the PCS attestation collateral (fetched same-origin
+  // via /pcs-collateral/* → Intel PCS, relayed by this shim). So COEP:require-corp does NOT break
+  // attestation. Without isolation the store silently falls back to an in-memory (session-only)
+  // store inside the worker, so this is a persistence enabler, not a hard gate.
+  //   - COOP same-origin   — isolates the browsing context group (severs window references to/from
+  //                          cross-origin openers/popups).
+  //   - COEP require-corp  — every subresource must opt in via CORP/CORS; all ours are same-origin.
+  c.header('Cross-Origin-Opener-Policy', 'same-origin');
+  c.header('Cross-Origin-Embedder-Policy', 'require-corp');
   // No camera/mic/geo/etc. — this is a text chat front end; deny the powerful features outright.
   c.header(
     'Permissions-Policy',

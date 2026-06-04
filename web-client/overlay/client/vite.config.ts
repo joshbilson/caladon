@@ -37,7 +37,23 @@ const buildSourceMap = process.env.NODE_ENV === 'development';
 
 export default defineConfig(({ command }) => ({
   base: '',
+  // Caladon device-store + RAG workers (store.worker.ts, embed.worker.ts) are spawned as ES module
+  // workers via `new Worker(new URL('…', import.meta.url), { type: 'module' })`. Force the worker
+  // build format to ES so the bundled worker keeps `import`/`export` (the @evolu/sqlite-wasm OPFS
+  // worker and @huggingface/transformers both ship ESM) instead of being downleveled to IIFE.
+  worker: {
+    format: 'es' as const,
+  },
   server: {
+    // Cross-origin isolation in DEV so the on-device store's OPFS persistence works against the
+    // Vite dev server (prod is handled by the shim's COOP/COEP response headers). Without these the
+    // store falls back to an in-memory (session-only) DB. Safe: everything the SPA loads is
+    // same-origin (bundle, caladon-core WASM, the /models MiniLM files, the workers, and the
+    // /pcs-collateral attestation relay), so require-corp does not break attestation.
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
     allowedHosts:
       (process.env.VITE_ALLOWED_HOSTS && process.env.VITE_ALLOWED_HOSTS.split(',')) || [],
     host: process.env.HOST || 'localhost',

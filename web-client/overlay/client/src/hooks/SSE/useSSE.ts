@@ -12,6 +12,7 @@ import type {
   TMessage,
   TPayload,
   TSubmission,
+  TConversation,
   EventSubmission,
   TMessageContentParts,
 } from 'librechat-data-provider';
@@ -28,6 +29,9 @@ import {
   openDelta,
   CaladonError,
 } from '~/lib/caladon';
+import { augmentPromptWithRAG } from '~/lib/rag/retrieval';
+import { getStoreProxy } from '~/lib/store';
+import type { StoredConversation, StoredMessage } from '~/lib/store';
 import store from '~/store';
 
 type ChatHelpers = Pick<
@@ -41,6 +45,75 @@ const CALADON_GATEWAY_CHAT_PATH = '/v1/chat';
 
 /** CS-3: cap the 401 re-sign/re-stream retries so a persistent 401 can't loop forever. */
 const MAX_401_RETRIES = 1;
+
+/** Coerce a TMessage ISO/Date/undefined timestamp to epoch ms (the store's numeric column). */
+function toEpochMs(value: unknown): number {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const t = Date.parse(value);
+    if (!Number.isNaN(t)) return t;
+  }
+  if (value instanceof Date) return value.getTime();
+  return Date.now();
+}
+
+/**
+ * Map a LibreChat `TMessage` onto the device store's `StoredMessage`. `contentJson` is the lossless
+ * JSON of `TMessage.content` (so rich content survives the round-trip; useHydrateConversation
+ * prefers it). `text` is the plain rendered text the FTS index tokenizes.
+ */
+function toStoredMessage(msg: TMessage, conversationId: string): StoredMessage {
+  return {
+    messageId: msg.messageId,
+    conversationId,
+    parentMessageId: msg.parentMessageId ?? null,
+    isCreatedByUser: msg.isCreatedByUser === true,
+    text: typeof msg.text === 'string' ? msg.text : '',
+    contentJson: msg.content != null ? JSON.stringify(msg.content) : null,
+    model: (msg as { model?: string | null }).model ?? null,
+    createdAt: toEpochMs((msg as { createdAt?: unknown }).createdAt),
+    updatedAt: toEpochMs((msg as { updatedAt?: unknown }).updatedAt),
+  };
+}
+
+/**
+ * Map a LibreChat `TConversation` onto the device store's `StoredConversation`. `convoJson` is the
+ * lossless serialized conversation so hydration is byte-for-byte faithful.
+ */
+function toStoredConversation(convo: TConversation, conversationId: string): StoredConversation {
+  return {
+    conversationId,
+    title: (convo.title as string | null | undefined) ?? null,
+    endpoint: (convo.endpoint as string | null | undefined) ?? null,
+    model: (convo.model as string | null | undefined) ?? null,
+    createdAt: toEpochMs((convo as { createdAt?: unknown }).createdAt),
+    updatedAt: toEpochMs((convo as { updatedAt?: unknown }).updatedAt) || Date.now(),
+    convoJson: JSON.stringify(convo),
+  };
+}
+
+/**
+ * Fire-and-forget persistence of one finalized turn (user + assistant) into the on-device encrypted
+ * store. OFF the chat hot path; never awaited by the SSE handler. Skips when the store isn't open
+ * and swallows every error so persistence can never affect the rendered/streamed turn.
+ */
+function persistTurnToStore(
+  conversationId: string,
+  userMessage: TMessage,
+  assistantMessage: TMessage,
+  conversation: TConversation,
+): void {
+  const proxy = getStoreProxy();
+  if (!proxy.isOpen) return;
+  void proxy
+    .persistTurn(
+      conversationId,
+      toStoredMessage(userMessage, conversationId),
+      toStoredMessage(assistantMessage, conversationId),
+      toStoredConversation(conversation, conversationId),
+    )
+    .catch((err) => console.error('[caladon] persistTurn failed (turn still rendered):', err));
+}
 
 export default function useSSE(
   submission: TSubmission | null,
@@ -124,8 +197,15 @@ export default function useSSE(
         return;
       }
 
-      const promptText = String((payload as { text?: string }).text ?? '');
+      const rawPromptText = String((payload as { text?: string }).text ?? '');
       const model = (payload as { model?: string }).model;
+
+      // RAG (trust-critical): retrieve relevant on-device chunks and PREPEND a <context> block to
+      // the prompt BEFORE it is sealed, so the gateway only ever sees the sealed envelope — the
+      // retrieved document/history text is injected inside the trust boundary and sealed with the
+      // rest of the prompt. augmentPromptWithRAG fails OPEN to the original prompt (and never to a
+      // remote service), so this can only ever add local context, never block the send.
+      const promptText = await augmentPromptWithRAG(rawPromptText);
 
       let wireBody: unknown;
       let authHeader: string;
@@ -279,6 +359,28 @@ export default function useSSE(
           setIsSubmitting(false);
           setShowStopButton(false);
         }
+
+        // Persist this turn to the on-device encrypted store (history + FTS + RAG source). This is
+        // strictly AFTER the cache write above and FULLY fire-and-forget: it is off the chat hot
+        // path and a store failure must never affect the rendered turn. We skip TEMPORARY chats
+        // (the user opted out of persistence) and skip when the store isn't open. The persisted
+        // text is the user's ORIGINAL message — never the RAG-augmented prompt (that augmentation
+        // is sealed for the gateway only and is not part of the user's history).
+        // The authoritative opt-out flag is the TOP-LEVEL submission.isTemporary (from the
+        // store.isTemporary atom — exactly what upstream useEventHandlers gates on); it is NOT
+        // reliably stamped onto submission.conversation. Gate on both (top-level is the real one).
+        const isTemporaryChat =
+          (submission as { isTemporary?: boolean }).isTemporary === true ||
+          (submission.conversation as { isTemporary?: boolean } | undefined)?.isTemporary === true;
+        if (!isTemporaryChat) {
+          persistTurnToStore(
+            conversationId,
+            stampedUserMessage,
+            buildResponseMessage(accumulatedText),
+            { ...(submission.conversation ?? {}), conversationId } as TConversation,
+          );
+        }
+
         (startupConfig?.balance?.enabled ?? false) && balanceQuery.refetch();
       });
 

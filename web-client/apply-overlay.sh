@@ -80,13 +80,108 @@ while IFS= read -r -d '' src; do
 done < <(find "${OVERLAY_DIR}" -type f -print0)
 echo "==> Applied ${COUNT} overlay file(s)."
 
+# 3. Merge the Caladon device-store + RAG dependencies INTO librechat/client/package.json BEFORE the
+#    build's `npm install`, rather than bolting them on afterwards.
+#
+#    Why merge (not an overlay package.json, not a post-hoc `npm install --no-save`):
+#      - The client's package.json lives in the CLONED (not-overlaid) librechat tree. Shipping an
+#        overlay package.json would CLOBBER librechat's ~200 deps. So we patch the real file in place.
+#      - A merge BEFORE `npm install` lets npm's normal resolver hoist/dedupe these and pull their
+#        transitive deps (e.g. onnxruntime-web under @huggingface/transformers, the OPFS worker that
+#        ships inside @evolu/sqlite-wasm). A post-hoc `--no-save` install is fragile across hoisting.
+#      - Idempotent: the node one-liner only ADDS a dep if it is not already pinned, so re-running
+#        (or an upstream that later vendors one of these) is a no-op and never downgrades.
+#
+#    The four runtime deps (LOCKED design):
+#      @evolu/sqlite-wasm  — official @sqlite.org/sqlite-wasm + SQLite3MultipleCiphers (SQLCipher key,
+#                            FTS5, OPFS via worker) — the encrypted on-device store.
+#      @huggingface/transformers — on-device MiniLM embeddings (webgpu→wasm), model served same-origin.
+#      pdfjs-dist + mammoth — in-browser PDF/DOCX parsing for RAG ingest (files never uploaded).
+CLIENT_PKG="${LIBRECHAT_DIR}/client/package.json"
+if [ ! -f "${CLIENT_PKG}" ]; then
+  echo "ERROR: ${CLIENT_PKG} not found — cannot merge Caladon deps. Aborting." >&2
+  exit 1
+fi
+echo "==> Merging Caladon device-store + RAG deps into client/package.json"
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+  pkg.dependencies = pkg.dependencies || {};
+  // Pinned ranges — keep in sync with web-client/SURGERY.md + the StoreProxy/RAG modules.
+  const add = {
+    "@evolu/sqlite-wasm": "^2",
+    "@huggingface/transformers": "^4",
+    "pdfjs-dist": "^6",
+    "mammoth": "^1",
+  };
+  let changed = 0;
+  for (const [name, range] of Object.entries(add)) {
+    if (!pkg.dependencies[name] && !(pkg.devDependencies && pkg.devDependencies[name])) {
+      pkg.dependencies[name] = range;
+      changed++;
+      console.log("    + " + name + "@" + range);
+    } else {
+      console.log("    = " + name + " (already present, left as-is)");
+    }
+  }
+  if (changed > 0) fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + "\n");
+  console.log("==> client/package.json: " + changed + " dep(s) added.");
+' "${CLIENT_PKG}"
+
+# 4. Fetch the RAG embedding model into client/public/models/ so it is served SAME-ORIGIN from
+#    /models/ (env.allowRemoteModels=false in embed.worker.ts: the library will NEVER reach
+#    huggingface.co at runtime). Best-effort: a build without network still proceeds — the embed
+#    worker then logs and RAG retrieval is skipped (fail-open), it never blocks chat. Idempotent:
+#    skipped if the model dir already exists.
+MODEL_DIR="${LIBRECHAT_DIR}/client/public/models/Xenova/all-MiniLM-L6-v2"
+if [ -d "${MODEL_DIR}" ]; then
+  echo "==> RAG model already present (skipping download): ${MODEL_DIR}"
+else
+  echo "==> Fetching RAG model Xenova/all-MiniLM-L6-v2 → client/public/models/ (best-effort)"
+  CALADON_MODEL_BASE="https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main"
+  # The minimal file set @huggingface/transformers loads for feature-extraction (quantized ONNX).
+  CALADON_MODEL_FILES=(
+    "config.json"
+    "tokenizer.json"
+    "tokenizer_config.json"
+    "onnx/model_quantized.onnx"
+  )
+  if command -v curl >/dev/null 2>&1; then
+    set +e
+    DL_OK=1
+    for f in "${CALADON_MODEL_FILES[@]}"; do
+      dest="${MODEL_DIR}/${f}"
+      mkdir -p "$(dirname "${dest}")"
+      if ! curl -fsSL "${CALADON_MODEL_BASE}/${f}" -o "${dest}"; then
+        echo "    ! failed to fetch ${f} (RAG will fall back to skip until the model is present)" >&2
+        DL_OK=0
+      else
+        echo "    + ${f}"
+      fi
+    done
+    set -e
+    if [ "${DL_OK}" -ne 1 ]; then
+      echo "==> RAG model fetch incomplete — leaving partial dir; re-run with network to complete." >&2
+    else
+      echo "==> RAG model fetched."
+    fi
+  else
+    echo "    ! curl not found — skipping model fetch. Place the model at ${MODEL_DIR} manually." >&2
+  fi
+fi
+
 cat <<'EOF'
 
 ==> Done. Next:
   - Install deps (monorepo root):  cd web-client/librechat && npm install
+        (the Caladon device-store + RAG deps were just merged into client/package.json, so this
+         single install resolves them with everything else — no extra install step needed.)
   - Build the shared packages:      npm run build:data-provider && npm run build:data-schemas \
                                        && npm run build:api && npm run build:client-package
   - Build the SPA:                  cd client && npm run build
+        (the RAG model was fetched to client/public/models/ above so it is served same-origin
+         from /models/; the store/embed workers bundle automatically via import.meta.url.)
   - Dev server (proxies the shim):  CALADON_SHIM_URL=http://localhost:8787 npm run dev   # client/
   - Run the shim alongside:         cd web-client/shim && npm run dev
 
