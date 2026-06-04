@@ -43,6 +43,15 @@ if (import.meta.hot) {
   import.meta.hot.data.__AuthContext = AuthContext;
 }
 
+/** Seeds the sidebar conversation cache from the on-device store. It MUST render INSIDE
+ *  <AuthContext.Provider> because it calls useAuthContext (via useConversationList) — so it lives
+ *  here as a child, NOT in the provider body, which executes above its own context value (calling
+ *  it there throws "useAuthContext should be used inside AuthProvider"). */
+const StoreSeeder = (): null => {
+  useConversationList();
+  return null;
+};
+
 const AuthContextProvider = ({
   authConfig,
   children,
@@ -58,10 +67,9 @@ const AuthContextProvider = ({
   );
   const setQueriesEnabled = useSetRecoilState<boolean>(store.queriesEnabled);
 
-  // Seed the sidebar's `allConversations` cache from the on-device store. Self-gates on an
-  // unlocked session + an OPEN store and re-runs when `isAuthenticated` flips, so mounting it here
-  // (the always-present auth provider) is enough — unlock() opens the store before flipping auth.
-  useConversationList();
+  // (Sidebar cache seeding from the on-device store is done by <StoreSeeder/> rendered INSIDE the
+  // provider return below — it CANNOT run here in the provider body, which executes above its own
+  // context value. It self-gates on an unlocked session + open store and re-runs when auth flips.)
 
   const userRoleName = user?.role ?? '';
   const isCustomRole = isAuthenticated && !!user?.role && !isSystemRoleName(user.role);
@@ -233,7 +241,12 @@ const AuthContextProvider = ({
     ],
   );
 
-  return <AuthContext.Provider value={memoedValue}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={memoedValue}>
+      <StoreSeeder />
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
 const useAuthContext = () => {
