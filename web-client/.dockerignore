@@ -1,0 +1,72 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# .dockerignore for the Caladon WEB container.
+#
+# IMPORTANT: the build CONTEXT is the repo ROOT (/Users/joshua/caladon), NOT web-client/.
+# build-wasm.sh reaches up to ../../caladon-core (a sibling of web-client/), and the client's
+# vite alias resolves @caladon/protocol to web-client/caladon/ — so caladon-core/ AND
+# web-client/caladon/ both have to be inside the context. This file therefore prunes the rest of
+# the repo (gateway/apple/python/etc.) and the heavy/regenerated trees we do NOT want shipped or
+# busting the layer cache. Paths are relative to the repo root.
+#
+# Build it with:
+#   docker build -f web-client/Dockerfile -t caladon-web .
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── VCS / editor / OS cruft ──
+.git
+.gitignore
+**/.git
+**/.DS_Store
+**/*.swp
+.github
+.vscode
+.idea
+
+# ── The Dockerfile + this file (never need to be in the image layers) ──
+web-client/Dockerfile
+web-client/.dockerignore
+
+# ── Repo siblings the WEB build does NOT need (keep context small / no secrets) ──
+# We KEEP: caladon-core/ (WASM source) and web-client/ (caladon SDK + librechat + shim).
+apple/
+contracts/
+docs/
+gateway/
+infra/
+swifty_crypto/
+swifty_inference/
+tests/
+.venv/
+.pytest_cache/
+*.md
+pyproject.toml
+uv.lock
+.env
+.env.*
+
+# ── caladon-core: ship the crate SOURCE, drop the local build artifacts ──
+# (the WASM is rebuilt inside the image from source; the host target/ is huge + arch-specific)
+caladon-core/target/
+caladon-core/**/*.rs.bk
+
+# ── web-client/caladon: ship src/ + the COMMITTED wasm glue (.js/.d.ts), but let the image
+#    REBUILD the binary. node_modules is reinstalled in-image. The host .wasm is re-emitted. ──
+web-client/caladon/node_modules/
+web-client/caladon/target/
+web-client/caladon/test/
+
+# ── web-client/librechat: the vendored upstream is git-ignored and RE-CLONED in-image by
+#    setup.sh at the pinned commit. Never copy the host clone (it would defeat the pin + bloat
+#    the context with its node_modules/dist). The overlay/ is copied in fresh, so the host
+#    librechat tree is entirely excluded. ──
+web-client/librechat/
+
+# ── web-client/shim: ship src/ + package*.json; reinstall node_modules in-image ──
+web-client/shim/node_modules/
+
+# ── generic node noise anywhere in the kept trees ──
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+**/npm-debug.log*
+**/.turbo/

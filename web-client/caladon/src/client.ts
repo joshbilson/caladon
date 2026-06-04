@@ -112,8 +112,15 @@ export class CaladonClient {
   private sessionKey: Uint8Array | null = null;
 
   constructor(config: CaladonClientConfig = {}) {
-    const fetchImpl =
-      config.fetchImpl ?? ((globalThis as { fetch?: FetchLike }).fetch as FetchLike | undefined);
+    // Resolve fetch and BIND it to globalThis. The browser's window.fetch throws
+    // "Illegal invocation" if invoked as a method of any other object — and we call it as
+    // this.cfg.fetchImpl(...), which would set `this` to the config object. Node's fetch is
+    // lenient (so the Node SDK tests pass unbound), but the browser is not. Binding is a no-op
+    // for arrow-function fetchImpls (e.g. test doubles) and correct for the real global fetch.
+    const rawFetch = config.fetchImpl ?? (globalThis as { fetch?: FetchLike }).fetch;
+    const fetchImpl = (
+      rawFetch ? (rawFetch as (...a: unknown[]) => unknown).bind(globalThis) : undefined
+    ) as FetchLike | undefined;
     if (!fetchImpl) throw new CaladonError('no fetch implementation (pass fetchImpl)');
     this.cfg = {
       shimBase: config.shimBase ?? DEFAULT_SHIM_BASE,

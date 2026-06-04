@@ -1,0 +1,125 @@
+# Caladon app — the WHOLE STACK in ONE fresh attested CVM (option C), reachable at app.caladon.ai.
+#
+# This is the gw-v1 confidential tier (docs/deployment-tiers.md, T1) PLUS the web container, so a
+# phone just opens https://app.caladon.ai — no separate gateway host, no LibreChat backend, no DB.
+# Three services, one TDX measurement:
+#
+#   web       — the committed stateless shim (web-client/shim) serving the built SPA from
+#               CALADON_STATIC_DIR AND proxying /api/caladon/* + /pcs-collateral/* . NO DB, NO keys.
+#               Its CALADON_GATEWAY_BASE points at the IN-CVM gateway service (http://gateway:8088),
+#               so browser → web (same origin) → gateway never leaves the TEE network.
+#   gateway   — the ciphertext router (GATEWAY_RUN_MODE=cvm). Opens the per-session-sealed prompt
+#               ONLY in TEE RAM, calls the attested RedPill inference enclave, seals the reply back.
+#               Direct attested inference — v1, no Letta/Postgres (agent memory is a later upgrade).
+#   ingress   — dstack-ingress: terminates TLS for app.caladon.ai INSIDE the CVM, targeting `web`.
+#
+# ── WHAT IS / ISN'T PROTECTED (claims discipline) ─────────────────────────────────────────────
+# This is ATTESTED CONFIDENTIAL COMPUTE, not end-to-end encryption. The plaintext prompt is opened
+# inside the gateway's TEE RAM to call inference; the trust boundary is the *attested measurement*
+# of THIS compose (the client pins it and refuses to send if it doesn't match — no TOFU), NOT a key
+# only the user's device holds. The browser (caladon-core WASM) seals to the CVM's attested session
+# key, the gateway opens it in-enclave, re-seals to the attested RedPill enclave. The host operator
+# cannot read plaintext (TDX memory encryption + no-logging + no host shell) — but the gateway
+# enclave can, by construction. Say "attested confidential", never "E2EE".
+#
+# ── ATTESTATION ───────────────────────────────────────────────────────────────────────────────
+# The dstack guest-agent UNIX socket is bind-mounted into the gateway so GET /v1/attestation returns
+# a REAL in-CVM TDX quote: the gateway POSTs {report_data: SHA-256(client eph_pub)} to
+# http://dstack/GetQuote over /var/run/dstack.sock; dstack binds it verbatim into report_data[0:32]
+# (contracts/attestation-evidence.md §2.1d), and POSTs /Info for compose_hash/app_id the client pins.
+#
+# ── MEASUREMENT (re-pin EVERY deploy) ───────────────────────────────────────────────────────────
+# The compose_hash of THIS file is measured into the attestation (rtmr3/app_id) and the client pins
+# {mr_td ‖ rtmr0..2 aggregate, compose_hash, app_id}. A FRESH CVM => NEW app_id + rtmr3 (and a new
+# compose_hash vs gw-v1, since this file differs). So the SPA MUST be rebuilt with VITE_CALADON_PINNED
+# set to THIS deploy's captured pin (DEPLOY.md §4-5). measurements.md §2.1 documents the policy.
+#
+# ── CUSTOM DOMAIN (trust-no-one) ────────────────────────────────────────────────────────────────
+# dstack-ingress provisions a Let's Encrypt cert for app.caladon.ai via DNS-01 INSIDE the CVM and
+# writes a CAA record (SET_CAA=true) so ONLY this TEE can ever issue a cert for the domain — TLS
+# terminates in the attested boundary, not at any proxy (plaintext-exposure map row 1).
+#
+# ── SECRETS ─────────────────────────────────────────────────────────────────────────────────────
+# Secrets (GATEWAY_INFERENCE_KEY, CLOUDFLARE_API_TOKEN, CERTBOT_EMAIL) arrive as dstack-SEALED env
+# (--env-file at deploy) — they are ${VARS} here, NOT literals: NOT in this measured file, NOT in
+# either published image, never logged. `logging:none` on the gateway is the no-plaintext control.
+services:
+  # ── Public front door: the committed shim, serving the built SPA + proxying to the in-CVM gateway.
+  # Browser hits THIS over TLS (via ingress); it is the only same-origin base the SPA knows. The web
+  # image is built from web-client/ (shim + the SPA built static, see DEPLOY.md §1) and pushed to ghcr.
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/joshbilson/caladon-web:caladon-app}
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    environment:
+      # The shim's upstream is the IN-CVM gateway service — same Docker network, never the public
+      # internet. The shim strips Cookie upstream and forwards the signed `Authorization: Caladon …`
+      # header verbatim (web-client/shim/src/proxy.ts); the gateway is the verifier + ciphertext router.
+      CALADON_GATEWAY_BASE: http://gateway:8088
+      # Serve the built SPA from inside the image; SPA history-mode falls back to index.html. The web
+      # image bakes the bundle at this path (DEPLOY.md §1). NO DB, NO keys: read-only file serving.
+      CALADON_STATIC_DIR: ${CALADON_STATIC_DIR:-/srv/spa}
+      # The shim listens here; ingress targets it. Keep in lockstep with the expose/TARGET_ENDPOINT below.
+      PORT: "8787"
+      # CORS allowlist = the public origin only (the SPA is served same-origin so this is belt-and-braces).
+      CALADON_ALLOWED_ORIGINS: ${CALADON_ALLOWED_ORIGINS:-https://app.caladon.ai}
+      # We're behind in-CVM TLS → mark the keyless session cookie Secure.
+      CALADON_COOKIE_SECURE: "true"
+      # Intel PCS collateral the browser can't fetch cross-origin (CORS); the shim proxies it. The
+      # browser does the dcap-qvl verify itself — the shim only relays the (public) collateral bytes.
+      CALADON_PCS_BASE: ${CALADON_PCS_BASE:-https://api.trustedservices.intel.com}
+    expose:
+      - "8787"   # reachable by dstack-ingress on the in-CVM network (no host port needed)
+    logging:
+      driver: "none"   # the shim never logs bodies; keep metadata out of host-visible logs too
+
+  # ── The ciphertext router. Opens sealed prompts ONLY in TEE RAM; calls attested RedPill inference.
+  # Not published on the public domain — reachable ONLY by `web` on the in-CVM network. Identical
+  # run-mode/inference/keepwarm config to dstack-compose.gw-v1.yml so the gateway behaves the same.
+  gateway:
+    image: ${GATEWAY_IMAGE:-ghcr.io/joshbilson/caladon-gateway:gw-v1}
+    restart: unless-stopped
+    environment:
+      GATEWAY_RUN_MODE: cvm
+      GATEWAY_ACCOUNTS_STORE: /data/accounts.json
+      GATEWAY_TRANSCRIPT_STORE: /data/transcripts.json
+      GATEWAY_DSTACK_QUOTE_URL: http://dstack/GetQuote
+      GATEWAY_INFERENCE_BASE: ${GATEWAY_INFERENCE_BASE:-https://api.redpill.ai/v1}
+      GATEWAY_INFERENCE_MODEL: ${GATEWAY_INFERENCE_MODEL:-phala/qwen3.6-35b-a3b-uncensored}
+      GATEWAY_INFERENCE_KEY: ${GATEWAY_INFERENCE_KEY}     # dstack-sealed; never in the image/compose_hash
+      # Keep these attested models hot so the app feels instant (no scale-to-zero cold-start).
+      GATEWAY_KEEPWARM_MODELS: ${GATEWAY_KEEPWARM_MODELS:-phala/qwen3.6-35b-a3b-uncensored,phala/qwen3-30b-a3b-instruct-2507,phala/deepseek-v3.2}
+      GATEWAY_KEEPWARM_INTERVAL: ${GATEWAY_KEEPWARM_INTERVAL:-120}
+    expose:
+      - "8088"        # reachable by `web` (and dstack-gateway) on the in-CVM network — NO host port
+    volumes:
+      - gwdata:/data
+      - /var/run/dstack.sock:/var/run/dstack.sock         # in-CVM guest-agent quote/Info socket
+    logging:
+      driver: "none"   # no logging of request paths/metadata (plaintext-exposure map row 5)
+
+  # ── Custom-domain TLS terminating INSIDE the CVM (trust-no-one). Targets the `web` front door (the
+  # SPA + shim), NOT the gateway directly. Sees only TLS bytes to/from `web`; the CAA record locks
+  # cert issuance for app.caladon.ai to THIS TEE.
+  dstack-ingress:
+    image: dstacktee/dstack-ingress:20250924@sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "443:443"
+    environment:
+      DOMAIN: ${CALADON_DOMAIN:-app.caladon.ai}
+      TARGET_ENDPOINT: http://web:8787
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}       # dstack-sealed; Zone:DNS:Edit on caladon.ai
+      GATEWAY_DOMAIN: _.${DSTACK_GATEWAY_DOMAIN:-dstack-pha-prod5.phala.network}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL}
+      SET_CAA: "true"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - cert-data:/etc/letsencrypt
+
+volumes:
+  gwdata:
+  cert-data:

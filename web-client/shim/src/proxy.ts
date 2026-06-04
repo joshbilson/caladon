@@ -84,11 +84,14 @@ export async function relay(c: Context, upstreamUrl: string, isStream = false): 
 
   const init: RequestInit = { method, headers };
 
-  // Forward the raw request body for methods that carry one. The body is an opaque envelope; we
-  // never read it. `duplex: 'half'` is required by undici to stream a request body.
+  // Forward the request body for methods that carry one. The body is a small OPAQUE sealed
+  // envelope; we BUFFER it (arrayBuffer) rather than stream it. Streaming a Web ReadableStream with
+  // `duplex: 'half'` can make undici throw when the upstream answers with an SSE stream before the
+  // request body is fully flushed (observed on /v1/chat → "gateway_unreachable"). Buffering the
+  // tiny request body avoids that edge case; the shim still never reads/decrypts it, and the
+  // no-buffering invariant that matters (the streamed SSE RESPONSE) is unaffected below.
   if (method !== 'GET' && method !== 'HEAD') {
-    init.body = c.req.raw.body;
-    (init as RequestInit & { duplex: 'half' }).duplex = 'half';
+    init.body = await c.req.raw.arrayBuffer();
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -1,9 +1,9 @@
 {
   "name": "caladon-core",
   "type": "module",
-  "description": "Caladon shared trust-core: seed identity, sealed channel, attestation. Compiles to WASM (web fork) + a UniFFI xcframework (native Swift). The Python swifty_crypto reference is the byte-parity oracle (see internal build notes).",
+  "description": "Caladon shared trust-core: seed identity, sealed channel, attestation. Compiles to WASM (web fork) + a UniFFI xcframework (native Swift). The Python swifty_crypto reference is the byte-parity oracle.",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "files": [
     "caladon_core_bg.wasm",
     "caladon_core.js",

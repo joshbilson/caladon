@@ -28,6 +28,9 @@ apple/Frameworks/CaladonCoreFFI.xcframework/
 # Gate-1 harness ephemeral secrets (generated per-run, shredded on exit)
 infra/cvm/.env.gate1
 
+# P5 caladon-app deploy: dstack-sealed secret env (RedPill/Cloudflare/Phala) — never commit
+infra/cvm/.env.caladon-app
+
 # Local Claude/ralph session state (not project source)
 .claude/
 

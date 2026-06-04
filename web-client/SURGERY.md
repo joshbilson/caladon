@@ -280,7 +280,7 @@ Everything in §A/§B/§C is editable today against the vendored tree; the crypt
 
 **Where the edits live.** The vendored `web-client/librechat/` tree is git-ignored. Every
 changed/added file is exported as an OVERLAY at `web-client/overlay/<same-relative-path>` and
-re-applied by `web-client/apply-overlay.sh` (clone pinned upstream → copy overlay). 12 files:
+re-applied by `web-client/apply-overlay.sh` (clone pinned upstream → copy overlay). 17 files:
 
 | Overlay file | Surgery | Section |
 |---|---|---|
@@ -296,6 +296,11 @@ re-applied by `web-client/apply-overlay.sh` (clone pinned upstream → copy over
 | `client/vite.config.ts` | `@caladon/protocol` (+ `/wasm`) alias to `web-client/caladon`; `server.fs.allow` for the external SDK; dev proxy `/api/caladon` + `/pcs-collateral` → shim (`CALADON_SHIM_URL`, default `:8787`) | §D1, §D2 |
 | `client/tsconfig.json` | `@caladon/protocol` path mappings | §D1 |
 | `client/src/vite-env.d.ts` | `VITE_CALADON_{PINNED,ATTESTATION,SHIM_BASE}` env types | §D |
+| `client/src/components/Auth/CaladonUnlock.tsx` *(new)* | the **seed-unlock screen** (gap G2): Create new identity (`crypto.getRandomValues(32)` → recovery code = lowercase-hex of the 32 bytes, grouped, with a "I saved it" confirm) / Restore from recovery code (textarea → decode to exactly 32 bytes, validate length) → both call `caladon.unlock(bytes)`; loading state during the handshake; FAIL-CLOSED error state (catches `AttestationFailedError`/any handshake error → "Could not establish a verified session — refusing to connect" + retry). Uses LibreChat primitives (`Button`/`Spinner`/`ErrorMessage`). | §A3, §D3 |
+| `client/src/routes/index.tsx` *(new)* | **route override**: `/login` renders `<CaladonUnlock/>` instead of `<Login/>` (password import dropped). Unlocked-guard needs no new code — identity is in-memory so `isAuthenticated` starts false on every load; `ChatRoute`'s `useAuthRedirect()` sends locked users to `/login`, `Root` renders nothing until unlocked, and AuthContext lock/logout already navigate to `/login`. | §A3 |
+| `client/src/hooks/SSE/useAdaptiveSSE.ts` *(new)* | FORCE the sealed+signed `useSSE` for every chat turn; the resumable path is hard-disabled. Upstream `useAdaptiveSSE` routes non-assistant endpoints to `useResumableSSE`, whose `startGeneration` POSTs the prompt **plaintext + unsigned** (→ gateway 401 + a leak). Drives `useSSE(submission)` + `useResumableSSE(null)`. | §B2, §D4 |
+| `client/src/hooks/SSE/useResumableSSE.ts` *(new)* | **no-op stub** — the resumable/`startGeneration`/`subscribe` plaintext code is physically removed (tree-shaken out of the bundle). The trust model forbids any unsealed/unsigned chat path. | §B2, §D4 |
+| `client/src/hooks/SSE/useResumeOnLoad.ts` *(new)* | **no-op stub** — never polls stream status nor writes the shared submission atom, so the only non-empty submission comes from a composer send (→ sealed `useSSE`). | §B2, §D4 |
 
 **What's WIRED (real, not stubbed):**
 - **§A (RIP OUT):** Passport/JWT/refresh amputated from AuthContext + request.ts; server LLM/agents
@@ -325,9 +330,11 @@ re-applied by `web-client/apply-overlay.sh` (clone pinned upstream → copy over
    before `new SSE(...)`; `createPayload` re-points `server` and passes the LibreChat payload
    through (the composer/edit/regenerate logic is untouched). Wire body is still `{envelope, model}`.
 2. **AuthContext keeps the legacy `token/login/logout` shape** (re-pointed to no-ops / seed unlock)
-   rather than deleting it, because ~60 call sites read `useAuthContext()`. The full seed-unlock UI
-   screen (replacing `components/Auth/**`) is a follow-up; `caladon.unlock(seed)` is the entry the
-   screen will call. `login()` now surfaces "use your seed".
+   rather than deleting it, because ~60 call sites read `useAuthContext()`. `login()` surfaces "use
+   your seed". **RESOLVED (gap G2):** the seed-unlock UI now exists — `CaladonUnlock.tsx` renders at
+   `/login` (route override in `routes/index.tsx`) and calls `caladon.unlock(seed)`. The recovery
+   code is the lowercase hex of the 32 seed bytes (the UI owns encode/decode — there is no mnemonic
+   codec in the SDK). `<Login/>`, `LoginForm` and the social buttons are no longer reached.
 3. **Mongo/Express/Passport files were NOT physically deleted** (§A says "delete in a later
    session"). They are amputated by re-pointing the frontend data layer so nothing reaches them and
    by not building `api/`. Physical deletion is a separate cleanup pass.

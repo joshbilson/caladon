@@ -256,12 +256,13 @@ export async function fetchCollateralFromPcs(quote: Uint8Array, opts: Collateral
  * the proxy (the proxy forwards to api.trustedservices.intel.com).
  */
 async function fetchRootCaCrl(opts: CollateralOptions, _qeIssuerChain: string): Promise<Uint8Array> {
-  // Intel SGX Root CA CRL — the canonical distribution point.
-  const r = await opts.fetchImpl(`${opts.pcsCollateralBase}/sgx/certification/v4/rootcacrl`);
+  // The Intel SGX Root CA CRL lives at the root cert's CRL distribution point on
+  // certificates.trustedservices.intel.com (NOT the PCS API host) and is binary DER. The shim
+  // exposes it at /root-ca-crl and returns it HEX-encoded, because binary DER cannot survive the
+  // browser's fetch().text() (UTF-8 decoding mangles non-text bytes). We detect hex and decode.
+  const r = await opts.fetchImpl(`${opts.pcsCollateralBase}/root-ca-crl`);
   if (!r.ok) throw new Error(`root CA CRL fetch failed ${r.status}`);
-  const body = await r.text();
-  // PCCS returns hex; Intel PCS returns DER bytes. Detect hex (only [0-9a-f]) vs binary.
-  const trimmed = body.trim();
+  const trimmed = (await r.text()).trim();
   if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length % 2 === 0) return fromHex(trimmed);
-  return utf8(body);
+  return utf8(trimmed);
 }

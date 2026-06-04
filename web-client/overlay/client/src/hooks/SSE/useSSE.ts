@@ -2,8 +2,19 @@ import { useEffect, useState } from 'react';
 import { v4 } from 'uuid';
 import { SSE } from 'sse.js';
 import { useSetRecoilState } from 'recoil';
-import { createPayload, removeNullishValues } from 'librechat-data-provider';
-import type { TMessage, TPayload, TSubmission, EventSubmission } from 'librechat-data-provider';
+import {
+  Constants,
+  ContentTypes,
+  createPayload,
+  removeNullishValues,
+} from 'librechat-data-provider';
+import type {
+  TMessage,
+  TPayload,
+  TSubmission,
+  EventSubmission,
+  TMessageContentParts,
+} from 'librechat-data-provider';
 import type { EventHandlerParams } from './useEventHandlers';
 import type { TResData } from '~/common';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
@@ -50,7 +61,6 @@ export default function useSSE(
     syncHandler,
     finalHandler,
     errorHandler,
-    messageHandler,
     contentHandler,
     createdHandler,
     titleHandler,
@@ -147,17 +157,80 @@ export default function useSSE(
       });
 
       /**
-       * Sealed-delta listeners (SURGERY.md §D4). The gateway emits `event: token | reasoning`
-       * whose `data` is `{ envelope }`; open each into plaintext before feeding messageHandler.
+       * Caladon drives the whole message lifecycle CLIENT-SIDE (SURGERY.md §D4).
+       *
+       * The gateway's SSE for /v1/chat emits ONLY sealed `event: token | reasoning`
+       * deltas, then `event: receipt`, then `event: done` — it never emits LibreChat's
+       * normal `event: message` with `{created}`/`{final}`, a server conversationId, or a
+       * server messageId. So the upstream lifecycle (createdHandler → streaming → finalHandler
+       * persist) never completes and the streamed assistant bubble renders empty.
+       *
+       * Two more gaps fixed here:
+       *   1. `useChatFunctions.ask()` seeds the assistant placeholder with `content: []`.
+       *      An empty array is truthy, so `MultiMessage` routes the bubble to the
+       *      content-parts renderer (which reads `message.content`, NOT `message.text`).
+       *      `messageHandler` only sets `text`, leaving `content` empty → empty bubble.
+       *      We therefore stream a real TEXT content part alongside `text`.
+       *   2. There is no server message store (the shim stubs /api/convos + /api/messages
+       *      empty). So we synthesize a stable client conversationId + assistant messageId,
+       *      and on `done` write the finalized turn into the messages cache for BOTH the
+       *      `new` key and the concrete conversationId key, then flip the conversation onto
+       *      that id. Because the messages query is `refetchOnMount: false`, navigating to
+       *      /c/<id> reads the seeded cache and does NOT refetch the empty shim response,
+       *      so the local turn is not clobbered.
        */
+
+      // Stable client-generated IDs (the gateway provides none).
+      const startConvoId = submission.conversation?.conversationId;
+      const isNewConvo =
+        startConvoId == null ||
+        startConvoId === Constants.NEW_CONVO ||
+        startConvoId === Constants.PENDING_CONVO;
+      const conversationId = isNewConvo ? v4() : (startConvoId as string);
+      const baseResponse = submission.initialResponse as TMessage;
+      const responseMessageId = baseResponse.messageId || v4();
+      const parentMessageId =
+        userMessage.messageId ?? baseResponse.parentMessageId ?? Constants.NO_PARENT;
+
+      // Build the in-flight user message stamped with the resolved conversationId so the
+      // messages-cache fan-out (getMessageCacheIds) keys it under the concrete convo too.
+      const stampedUserMessage: TMessage = {
+        ...userMessage,
+        conversationId,
+      };
+
+      const buildResponseMessage = (text: string): TMessage => {
+        const content: TMessageContentParts[] = [
+          // Render via the content-parts path that the truthy `content: []` placeholder forces;
+          // also carry `text` so the legacy text path renders if `content` is ever dropped.
+          { type: ContentTypes.TEXT, [ContentTypes.TEXT]: { value: text } } as TMessageContentParts,
+        ];
+        return {
+          ...baseResponse,
+          messageId: responseMessageId,
+          parentMessageId,
+          conversationId,
+          isCreatedByUser: false,
+          text,
+          content,
+          unfinished: false,
+          error: false,
+        };
+      };
+
+      let accumulatedText = '';
       const onSealedDelta = async (e: MessageEvent) => {
         try {
           const { envelope } = JSON.parse(e.data) as { envelope: import('@caladon/protocol').Envelope };
-          const text = await openDelta(envelope);
-          const initialResponse = {
-            ...(submission.initialResponse as TMessage),
-          };
-          messageHandler(text, { ...submission, userMessage, initialResponse });
+          // Sealed deltas are INCREMENTAL; accumulate the cumulative plaintext and re-render the
+          // full assistant message on each token (mirrors upstream token streaming, which replaces).
+          accumulatedText += await openDelta(envelope);
+          setIsSubmitting(true);
+          setMessages([
+            ...submission.messages,
+            stampedUserMessage,
+            buildResponseMessage(accumulatedText),
+          ]);
         } catch (error) {
           console.error('Error opening sealed delta:', error);
         }
@@ -173,8 +246,32 @@ export default function useSSE(
 
       sse.addEventListener('done', () => {
         clearAllDrafts(submission.conversation?.conversationId);
-        setIsSubmitting(false);
-        setShowStopButton(false);
+        try {
+          // FINALIZE client-side: synthesize the `final` data shape upstream's finalHandler
+          // expects, so the turn persists in the messages cache (both `new` and the concrete
+          // convo id, via setMessages' cache fan-out) and the conversation flips onto the id.
+          finalHandler(
+            {
+              requestMessage: stampedUserMessage,
+              responseMessage: buildResponseMessage(accumulatedText),
+              conversation: {
+                ...(submission.conversation ?? {}),
+                conversationId,
+              },
+            } as unknown as Parameters<typeof finalHandler>[0],
+            { ...submission, userMessage: stampedUserMessage } as EventSubmission,
+          );
+        } catch (error) {
+          console.error('Error finalizing sealed response:', error);
+          // Fail-safe: at minimum keep the rendered message and stop the UI.
+          setMessages([
+            ...submission.messages,
+            stampedUserMessage,
+            buildResponseMessage(accumulatedText),
+          ]);
+          setIsSubmitting(false);
+          setShowStopButton(false);
+        }
         (startupConfig?.balance?.enabled ?? false) && balanceQuery.refetch();
       });
 

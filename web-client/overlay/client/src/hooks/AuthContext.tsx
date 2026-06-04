@@ -90,10 +90,24 @@ const AuthContextProvider = ({
     async (seed: Uint8Array) => {
       setError(undefined);
       const result = await caladonUnlock(seed);
-      setAccountId(result.identity.accountId);
-      applyUserContext({ isAuthenticated: true, user, redirect: '/c/new', token: undefined });
+      const account = result.identity.accountId;
+      setAccountId(account);
+      // The seed-derived identity IS the single local user. LibreChat gates the USER-role query
+      // — and therefore conversation initialization in ChatRoute (`roles?.USER != null`) — on
+      // `user?.role` being set, so we synthesize a local USER. Without a role the app authenticates
+      // but never creates a conversation, leaving the chat pane blank.
+      const caladonUser = {
+        id: account,
+        username: account.slice(0, 12),
+        name: 'Caladon',
+        email: '',
+        avatar: '',
+        role: SystemRoles.USER,
+        provider: 'caladon',
+      } as unknown as t.TUser;
+      applyUserContext({ isAuthenticated: true, user: caladonUser, redirect: '/c/new', token: undefined });
     },
-    [applyUserContext, user],
+    [applyUserContext],
   );
 
   const lock = useCallback(() => {

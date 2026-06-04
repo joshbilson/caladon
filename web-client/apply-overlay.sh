@@ -45,6 +45,12 @@ else
 fi
 
 # 2. Copy the overlay over the upstream tree, preserving relative paths.
+#
+# The copy is generic: EVERY file under overlay/ is copied onto the matching librechat/ path, so
+# adding a new overlay file (e.g. the G2 seed-unlock UI:
+#   client/src/components/Auth/CaladonUnlock.tsx  — the seed-unlock screen (create/restore identity)
+#   client/src/routes/index.tsx                   — route override: /login renders <CaladonUnlock/>
+# ) needs no edit here — just drop it in overlay/ and re-run. (List kept in sync with SURGERY.md.)
 if [ ! -d "${OVERLAY_DIR}" ]; then
   echo "ERROR: overlay dir ${OVERLAY_DIR} not found" >&2
   exit 1
