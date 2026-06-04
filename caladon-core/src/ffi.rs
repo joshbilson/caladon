@@ -207,6 +207,10 @@ pub fn challenge_hex(eph_pub: Vec<u8>) -> String {
 /// Fail-closed verification with collateral PASSED IN (offline/deterministic — the Swift
 /// `DcapVerifier` fetches PCS collateral and hands it here). Never throws on a verification
 /// FAILURE: returns a `Verdict` with `ok=false` and the specific reason.
+/// `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the §4.6 client binding);
+/// `expected_session_pub` is the RAW 32-byte CVM X25519 session pubkey (the caller base64-decodes
+/// `ev.session_pub`) — §4.6b checks report_data[32:64] == SHA-256(session_pub) so a relay cannot
+/// substitute its own session key and MITM the sealed channel.
 #[uniffi::export]
 pub fn verify_quote(
     quote_bytes: Vec<u8>,
@@ -214,6 +218,7 @@ pub fn verify_quote(
     info_json: String,
     now_secs: u64,
     expected_challenge_hex: String,
+    expected_session_pub: Vec<u8>,
     pinned: PinnedSet,
 ) -> Verdict {
     attestation::verify_quote(
@@ -222,6 +227,7 @@ pub fn verify_quote(
         &info_json,
         now_secs,
         &expected_challenge_hex,
+        &expected_session_pub,
         &pinned.into_internal(),
     )
     .into()

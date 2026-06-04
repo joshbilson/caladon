@@ -341,7 +341,110 @@ app.get('/api/search/enable', (c) => c.json(false));
  * Vite dev server keeps serving the SPA. serveStatic is read-only file serving — NO DB, NO keys.
  * Registered LAST so /api/* and /pcs-collateral/* always take precedence.
  * ------------------------------------------------------------------------------------------- */
+
+/**
+ * Content-Security-Policy for the SPA front door — the device-side half of the trust-no-one
+ * channel. The shim is an UNTRUSTED keyless relay; if a malicious shim / CDN / MITM could inject a
+ * <script> or swap caladon_core_bg.wasm, it could read the seed in the browser BEFORE it is sealed,
+ * defeating the whole sealed channel. This CSP is the browser-enforced backstop that says: only
+ * same-origin code runs, and it can only talk to this same origin.
+ *
+ * Why each directive is what it is (verified against the built bundle in
+ * librechat/client/dist/index.html + dist/assets/*):
+ *  - default-src 'self'                — deny-by-default; every fetch must be same-origin.
+ *  - script-src 'self' 'wasm-unsafe-eval' '<inline-hash>'
+ *      • 'self'             — the Vite bundle (assets/*.js), registerSW.js and sw.js (all same-origin).
+ *      • 'wasm-unsafe-eval' — caladon-core + the bundle load WASM via WebAssembly.instantiateStreaming,
+ *                             which CSP gates behind this token (it does NOT enable JS eval()).
+ *      • the sha256 hash    — pins the ONE inline <script> in index.html (the pre-paint theme
+ *                             bootstrap that picks the loader background). We hash it instead of
+ *                             allowing 'unsafe-inline' so a malicious shim CANNOT inject its own
+ *                             inline script — that is the core protection here. NOTE: the bundle has
+ *                             no inline event handlers and no other inline <script>, so this single
+ *                             hash is sufficient. If the SPA is rebuilt and that inline snippet
+ *                             changes, this hash MUST be regenerated (see CSP_INLINE_SCRIPT_SHA256
+ *                             below) or the app white-screens under enforce.
+ *      • intentionally NO 'unsafe-inline' / NO 'unsafe-eval' — both would re-open script injection.
+ *  - style-src 'self' 'unsafe-inline'  — LOOSENED (and unavoidable): index.html carries an inline
+ *      <style>, the theme bootstrap injects a <style> element at runtime, and the UI libs
+ *      (emotion/codemirror/mermaid/framer-motion) inject inline styles dynamically. CSP cannot hash
+ *      runtime-generated styles and the shim has no nonce-injection hook, so 'unsafe-inline' for
+ *      STYLES is required for this SPA class. Styles cannot exfiltrate the seed, so this is the
+ *      acceptable, narrowly-scoped relaxation.
+ *  - connect-src 'self'                — XHR/fetch/EventSource may ONLY hit this origin, which covers
+ *      /api/caladon/* (→ gateway) and /pcs-collateral/* (→ Intel PCS). This deliberately BLOCKS the
+ *      bundle's optional HyperDX/OTEL telemetry beacon (in-otel.hyperdx.io) and any other 3rd-party
+ *      call — for a trust-no-one product, refusing to let page code phone home is a feature: a
+ *      swapped/injected script still cannot exfiltrate to an attacker origin.
+ *  - img-src 'self' data:              — local assets + inline data: images the UI generates.
+ *  - font-src 'self'                   — Inter/KaTeX/RobotoMono are bundled local files (no CDN).
+ *  - worker-src 'self' blob:           — LOOSENED to blob:: the HEIC image converter spins up a
+ *      Worker via new Worker(URL.createObjectURL(blob)). 'self' alone blocks blob: workers. Workers
+ *      inherit this CSP, so they remain same-origin-confined.
+ *  - object-src 'none'                 — no plugins/embeds.
+ *  - base-uri 'self'                   — stop <base> hijack from rewriting relative asset/API URLs.
+ *  - frame-ancestors 'none'            — not embeddable (clickjacking; also set via X-Frame-Options).
+ *  - form-action 'self'                — no off-origin form posts.
+ *  - manifest-src 'self' / media-src 'self' — PWA manifest + the local notification .mp3.
+ *
+ * FOLLOW-UP (SRI / WASM-hash pinning): CSP gates WHERE the WASM may load from (same origin) but not
+ * WHICH bytes. Defense-in-depth would pin the exact caladon_core_bg.wasm hash so a same-origin swap
+ * is also caught. We do NOT compute it here because (a) the shim serves whatever bundle is mounted
+ * at CALADON_STATIC_DIR and has no build-time manifest, and (b) the real integrity anchor is the
+ * attested CVM image measurement (the whole front door is served from inside the measured CVM over
+ * in-CVM TLS). When the build pipeline emits an asset manifest, add Subresource-Integrity (integrity=)
+ * on the module scripts and a WASM digest check at instantiation, sourced from that manifest.
+ */
+const CSP_INLINE_SCRIPT_SHA256 = "'sha256-ApRfxd0rLedfnw6ZDBJ3VtMvEqlMCVS8OkY8rahs7+Q='";
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  `script-src 'self' 'wasm-unsafe-eval' ${CSP_INLINE_SCRIPT_SHA256}`,
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "manifest-src 'self'",
+  "media-src 'self'",
+].join('; ');
+
+/**
+ * Security response headers for the static front door (the SPA shell + the caladon-core WASM). These
+ * apply ONLY to the same-origin static/SPA responses, NOT to the /api/caladon/* or /pcs-collateral/*
+ * relays (those return next() untouched). The CSP is ENFORCE mode (not report-only) — verified to be
+ * the minimal known-safe policy that still runs the bundle, instantiates the WASM and makes the
+ * SDK's same-origin calls. HSTS is safe because TLS terminates inside the CVM.
+ */
+const setSecurityHeaders = (c: Context): void => {
+  c.header('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('X-Frame-Options', 'DENY');
+  // No camera/mic/geo/etc. — this is a text chat front end; deny the powerful features outright.
+  c.header(
+    'Permissions-Policy',
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()',
+  );
+  // TLS terminates in-CVM; pin HTTPS for 180 days incl. subdomains.
+  c.header('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+};
+
 if (config.staticDir) {
+  // 0. Stamp security headers on every static/SPA response (real files AND the index.html fallback)
+  //    BEFORE serving the body. Scoped to the front door only: API and PCS-collateral relays fall
+  //    through with next() so their own response handling is unchanged. await next() so the headers
+  //    are present on the response serveStatic produces downstream.
+  app.use('/*', async (c, next) => {
+    const p = c.req.path;
+    if (p.startsWith('/api/') || p.startsWith('/pcs-collateral/')) return next();
+    setSecurityHeaders(c);
+    await next();
+  });
+
   // 1. Serve real files (JS/CSS/assets/index.html) from the built bundle.
   app.use('/*', serveStatic({ root: config.staticDir }));
 

@@ -39,6 +39,9 @@ type ChatHelpers = Pick<
 const CALADON_CHAT_PATH = '/api/caladon/chat';
 const CALADON_GATEWAY_CHAT_PATH = '/v1/chat';
 
+/** CS-3: cap the 401 re-sign/re-stream retries so a persistent 401 can't loop forever. */
+const MAX_401_RETRIES = 1;
+
 export default function useSSE(
   submission: TSubmission | null,
   chatHelpers: ChatHelpers,
@@ -103,6 +106,10 @@ export default function useSSE(
      *   3. sign the request → `Authorization: Swifty …` (no Bearer JWT).
      *   4. open each sealed `token`/`reasoning` delta before handing plaintext to the handlers.
      */
+    // CS-3: per-submission 401 retry budget (resets each time this effect re-runs for a new
+    // submission), so the re-sign/re-stream path below cannot loop indefinitely.
+    let retry401Count = 0;
+
     const setup = async () => {
       const payloadData = createPayload(submission);
       let { payload } = payloadData;
@@ -276,7 +283,14 @@ export default function useSSE(
       });
 
       sse.addEventListener('message', (e: MessageEvent) => {
-        const data = JSON.parse(e.data);
+        // CS-6: a malformed SSE frame must not throw uncaught — log-safe and drop the frame.
+        let data;
+        try {
+          data = JSON.parse(e.data);
+        } catch (error) {
+          console.error('Ignoring malformed SSE message frame:', error);
+          return;
+        }
 
         if (data.final != null) {
           clearAllDrafts(submission.conversation?.conversationId);
@@ -355,9 +369,14 @@ export default function useSSE(
         /**
          * Caladon auth (SURGERY.md §A3): no refresh-token dance. A 401 is almost always clock
          * skew on the signed timestamp — re-sign and retry once; otherwise surface "re-unlock".
+         *
+         * CS-3: bound the re-sign/re-stream so a PERSISTENT 401 cannot spin forever (each retry
+         * re-streams, which re-fires `error`). Allow at most MAX_401_RETRIES attempts, then fall
+         * through to the normal error surface.
          */
         // @ts-ignore — sse.js attaches responseCode on the event
-        if (e.responseCode === 401) {
+        if (e.responseCode === 401 && retry401Count < MAX_401_RETRIES) {
+          retry401Count += 1;
           try {
             const resigned = await signRequest('POST', CALADON_GATEWAY_CHAT_PATH);
             if (sse) {

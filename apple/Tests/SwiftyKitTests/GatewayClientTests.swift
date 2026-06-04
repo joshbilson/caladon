@@ -35,6 +35,11 @@ private struct FakeVerifier: QuoteVerifier {
 
 private let PINNED = PinnedSet(measurements: ["M1"], composeHashes: ["C1"], workloadIDs: ["W1"])
 
+// The CVM session pubkey carried in the evidence bundle + its attested binding
+// (report_data[32:64] = SHA-256(session_pub)); the verifier re-derives and matches it (§4.6b).
+private let SESSION_PUB = Data(repeating: 0x22, count: 32)
+private let SESSION_BINDING = SHA256.hash(data: SESSION_PUB).map { String(format: "%02x", $0) }.joined()
+
 private func client(transport: Transport, quote: Result<VerifiedQuote, VerdictReason>) -> GatewayClient {
     GatewayClient(
         baseURL: URL(string: "https://gw.test")!,
@@ -49,7 +54,8 @@ private func client(transport: Transport, quote: Result<VerifiedQuote, VerdictRe
 private func tdxBundleJSON() -> Data {
     // The bundle's trusted reportData/measurement come from the (fake) QuoteVerifier, not
     // these raw JSON fields, so the JSON just needs a valid regime to parse.
-    try! JSONSerialization.data(withJSONObject: ["regime": "tdx-onchain", "intel_quote": "0400..."])
+    try! JSONSerialization.data(withJSONObject: ["regime": "tdx-onchain", "intel_quote": "0400...",
+                                                 "session_pub": SESSION_PUB.base64EncodedString()])
 }
 
 final class GatewayClientTests: XCTestCase {
@@ -57,7 +63,7 @@ final class GatewayClientTests: XCTestCase {
     func testVerifyServerSucceedsAndSendsSignedAuth() async throws {
         let transport = FakeTransport(response: (tdxBundleJSON(), 200))
         let good = VerifiedQuote(measurement: "M1", composeHash: "C1", workloadID: "W1",
-                                 reportData: "chal", noLog: true)
+                                 reportData: "chal", sessionBinding: SESSION_BINDING, noLog: true)
         let c = client(transport: transport, quote: .success(good))
         try await c.verifyServer(expectedChallenge: "chal")
         // the request carried a seed-auth header for the account
@@ -80,7 +86,7 @@ final class GatewayClientTests: XCTestCase {
     func testVerifyServerThrowsOnHTTPError() async {
         let transport = FakeTransport(response: (Data(), 503))
         let good = VerifiedQuote(measurement: "M1", composeHash: "C1", workloadID: "W1",
-                                 reportData: "chal", noLog: true)
+                                 reportData: "chal", sessionBinding: SESSION_BINDING, noLog: true)
         let c = client(transport: transport, quote: .success(good))
         do {
             try await c.verifyServer(expectedChallenge: "chal")
@@ -97,7 +103,7 @@ final class GatewayClientTests: XCTestCase {
 
     func testVerifyServerPropagatesTransportError() async {
         let good = VerifiedQuote(measurement: "M1", composeHash: "C1", workloadID: "W1",
-                                 reportData: "chal", noLog: true)
+                                 reportData: "chal", sessionBinding: SESSION_BINDING, noLog: true)
         let c = client(transport: ThrowingTransport(), quote: .success(good))
         do {
             try await c.verifyServer(expectedChallenge: "chal")

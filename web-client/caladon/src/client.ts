@@ -288,6 +288,18 @@ export class CaladonClient {
     if (!this.cfg.pinned) {
       throw new CaladonError('no pinned set configured (docs/security/measurements.md) — refusing (no TOFU)');
     }
+    // KEYSTONE: the TDX quote binds BOTH halves of report_data —
+    //   report_data[0:32]  = SHA-256(client_eph_pub)  (the channel "challenge", below)
+    //   report_data[32:64] = SHA-256(cvm_session_pub) (the gateway X25519 session pub, ev.session_pub)
+    // The session_pub was previously delivered out-of-band and NEVER attested, so a relay could
+    // substitute its own key and the client would seal its WMK to the attacker. We now pass the raw
+    // session_pub bytes into verify_quote_sync, which checks report_data[32:64] == SHA-256(it) as
+    // part of the fail-closed verdict — BEFORE establishSession derives SK off the same pub. Without
+    // it we cannot verify the binding, so refuse (fail closed) rather than trust an unbound key.
+    if (!ev.session_pub) {
+      throw new CaladonError('evidence carries no session_pub — cannot verify the quote binding (§D3.2)');
+    }
+    const sessionPub = fromBase64(ev.session_pub);
     const challengeHex = this.wasm.challenge_hex(ephPub);
     const infoJson = JSON.stringify(ev.info ?? {});
     const verdict = this.wasm.verify_quote_sync(
@@ -296,6 +308,7 @@ export class CaladonClient {
       infoJson,
       BigInt(this.cfg.nowSecs()),
       challengeHex,
+      sessionPub,
       JSON.stringify(this.cfg.pinned),
     ) as Verdict;
 
@@ -309,7 +322,15 @@ export class CaladonClient {
   // 5. Session — derive SK against the attested session_pub, seal + deliver the WMK.
   // -------------------------------------------------------------------------------------------
 
-  /** Derive SK against the CVM session_pub, seal the WMK, POST /v1/session. Returns SK. */
+  /**
+   * Derive SK against the CVM session_pub, seal the WMK, POST /v1/session. Returns SK.
+   *
+   * PRECONDITION (enforced by `handshake`'s ordering): `verifyAttestation` MUST have passed for this
+   * same `ev` first — it is what proves report_data[32:64] == SHA-256(ev.session_pub), i.e. that the
+   * quote binds this exact session_pub. We derive SK off that same `ev.session_pub` here, so an
+   * unverified or substituted key would otherwise seal the WMK to an attacker. Never call this on
+   * evidence whose binding has not been attested under a non-skip policy.
+   */
   async establishSession(ev: AttestationEvidence, ephPriv: Uint8Array, ephPub: Uint8Array): Promise<Uint8Array> {
     const ident = this.requireIdentity();
     if (!ev.session_pub) throw new CaladonError('evidence carries no session_pub — cannot derive SK (§6)');

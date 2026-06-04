@@ -318,7 +318,7 @@ RustBuffer uniffi_caladon_core_fn_func_unpad(RustBuffer padded, RustCallStatus *
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CALADON_CORE_FN_FUNC_VERIFY_QUOTE
 #define UNIFFI_FFIDEF_UNIFFI_CALADON_CORE_FN_FUNC_VERIFY_QUOTE
-RustBuffer uniffi_caladon_core_fn_func_verify_quote(RustBuffer quote_bytes, RustBuffer collateral_json, RustBuffer info_json, uint64_t now_secs, RustBuffer expected_challenge_hex, RustBuffer pinned, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_caladon_core_fn_func_verify_quote(RustBuffer quote_bytes, RustBuffer collateral_json, RustBuffer info_json, uint64_t now_secs, RustBuffer expected_challenge_hex, RustBuffer expected_session_pub, RustBuffer pinned, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_CALADON_CORE_FN_FUNC_X25519_PUBLIC

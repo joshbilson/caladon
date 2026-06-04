@@ -60,32 +60,38 @@ def _dstack_fetch(quote_url: str, socket_path: str = "", *, transport=None):
     """Build the T1 evidence fetch from the dstack guest-agent (dstack 0.5.x).
 
     The guest agent is a UNIX-domain socket inside the CVM (default /var/run/dstack.sock), NOT
-    a TCP host. We `POST {quote_url} {"report_data": <challenge-hex>}` over a UDS transport. The
-    agent places report_data VERBATIM (no hashing) into the TDX quote, zero-padded to 64 bytes,
-    so our 32-byte challenge = SHA-256(client eph_pub) lands at report_data[0:32] and
-    report_data[32:64] = 0 (contracts/attestation-evidence.md §2.1d). We then POST /Info for the
-    CVM identity (compose_hash/app_id) the client pins. Returns the regime-tagged evidence
+    a TCP host. We `POST {quote_url} {"report_data": <report_data-hex>}` over a UDS transport. The
+    agent places report_data VERBATIM (no hashing) into the TDX quote, zero-padded to 64 bytes.
+    The provider passes a 128-hex (64-byte) report_data binding BOTH pubkeys: report_data[0:32] =
+    the challenge = SHA-256(client eph_pub), report_data[32:64] = SHA-256(cvm session_pub)
+    (contracts/attestation-evidence.md §2.1d). When no report_data is supplied (plain/no session
+    key) we fall back to the 64-hex challenge alone, so report_data[32:64] = 0. We then POST /Info
+    for the CVM identity (compose_hash/app_id) the client pins. Returns the regime-tagged evidence
     bundle; the provider adds the CVM session_pub. Empty URL -> fail closed (503).
 
     Sync httpx; the handshake is infrequent (move to threadpool if it ever hits the hot path).
     `transport` is injectable for tests; in production it is an httpx UDS transport built from
     `socket_path` (or plain TCP when `socket_path` is empty, e.g. the dev simulator)."""
     if not quote_url:
-        def _unconfigured(challenge: str) -> dict:
+        def _unconfigured(challenge: str, report_data: str | None = None) -> dict:
             raise AttestationError("dstack quote url not configured (GATEWAY_DSTACK_QUOTE_URL)")
         return _unconfigured
 
     # Derive the /Info endpoint from the quote URL (same host/socket, sibling path).
     info_url = quote_url.rsplit("/", 1)[0] + "/Info" if "/" in quote_url else ""
 
-    def _fetch(challenge: str) -> dict:
+    def _fetch(challenge: str, report_data: str | None = None) -> dict:
         import httpx
+
+        # report_data is the full hex written verbatim into the quote (challenge ‖
+        # SHA-256(session_pub) when bound); default to the challenge alone (no session binding).
+        rd_post = report_data if report_data is not None else challenge
 
         tx = transport if transport is not None else (
             httpx.HTTPTransport(uds=socket_path) if socket_path else None
         )
         with httpx.Client(transport=tx, timeout=10.0) as client:
-            resp = client.post(quote_url, json={"report_data": challenge})
+            resp = client.post(quote_url, json={"report_data": rd_post})
             resp.raise_for_status()
             q = resp.json()
             quote = q.get("quote") or q.get("intel_quote")

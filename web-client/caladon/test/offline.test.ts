@@ -117,6 +117,14 @@ describe('attestation verify (offline, committed live quote + fixture collateral
   const CHALLENGE_HEX = 'a49d15e53c99ece49b4bbd54e4b92ba9eec3449a01ba148ab9683ac6b42dce24';
   const APP_ID = '64111f5c9442480b82b865f30e4085035a5e790b';
   const COMPOSE_HASH = 'd95a0706c94055db38c3d26de7933f2c66a3b8c0da0a2b73bd3f85a0c1b0c90c';
+  // KEYSTONE binding: the quote now also binds report_data[32:64] == SHA-256(cvm_session_pub).
+  // SESSION_PUB is the raw 32-byte gateway X25519 session pub whose SHA-256 the committed
+  // intel_quote.hex carries in report_data[32:64]. It MUST be recaptured together with the quote
+  // (the verify phase recaptures both from the live gateway built with the new GetQuote binding —
+  // see capture-pin.ts). The committed quote predates the binding ([32:64] is currently zeroed), so
+  // until the fixture is regenerated SESSION_PUB stays a placeholder and these vectors expect a
+  // BINDING_MISMATCH on the session half rather than ok=true.
+  const SESSION_PUB = new Uint8Array(32);
 
   let quote: Uint8Array;
   let collateralJson: string;
@@ -140,7 +148,7 @@ describe('attestation verify (offline, committed live quote + fixture collateral
       compose_hashes: [COMPOSE_HASH],
       workload_ids: [APP_ID],
     });
-    const v = wasm.verify_quote_sync(quote, collateralJson, JSON.stringify({ compose_hash: COMPOSE_HASH, app_id: APP_ID }), NOW_SECS, CHALLENGE_HEX, pinned) as {
+    const v = wasm.verify_quote_sync(quote, collateralJson, JSON.stringify({ compose_hash: COMPOSE_HASH, app_id: APP_ID }), NOW_SECS, CHALLENGE_HEX, SESSION_PUB, pinned) as {
       ok: boolean;
       reason: string;
       measurement_matched: boolean;
@@ -152,14 +160,14 @@ describe('attestation verify (offline, committed live quote + fixture collateral
     const m = tdxMeasurements(quote);
     const pinned = JSON.stringify({ measurements: [m.aggregate], compose_hashes: [COMPOSE_HASH], workload_ids: [APP_ID] });
     const wrongChallenge = 'b'.repeat(64);
-    const v = wasm.verify_quote_sync(quote, collateralJson, JSON.stringify({ compose_hash: COMPOSE_HASH, app_id: APP_ID }), NOW_SECS, wrongChallenge, pinned) as { ok: boolean; reason: string };
+    const v = wasm.verify_quote_sync(quote, collateralJson, JSON.stringify({ compose_hash: COMPOSE_HASH, app_id: APP_ID }), NOW_SECS, wrongChallenge, SESSION_PUB, pinned) as { ok: boolean; reason: string };
     expect(v.ok).toBe(false);
     expect(v.reason).toBe('BINDING_MISMATCH');
   });
 
   it('fails closed (MEASUREMENT_UNPINNED) for an unpinned measurement', () => {
     const pinned = JSON.stringify({ measurements: ['00'.repeat(192)], compose_hashes: [COMPOSE_HASH], workload_ids: [APP_ID] });
-    const v = wasm.verify_quote_sync(quote, collateralJson, JSON.stringify({ compose_hash: COMPOSE_HASH, app_id: APP_ID }), NOW_SECS, CHALLENGE_HEX, pinned) as { ok: boolean; reason: string };
+    const v = wasm.verify_quote_sync(quote, collateralJson, JSON.stringify({ compose_hash: COMPOSE_HASH, app_id: APP_ID }), NOW_SECS, CHALLENGE_HEX, SESSION_PUB, pinned) as { ok: boolean; reason: string };
     expect(v.ok).toBe(false);
     expect(v.reason).toBe('MEASUREMENT_UNPINNED');
   });

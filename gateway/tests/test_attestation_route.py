@@ -57,7 +57,7 @@ async def test_plain_mode_returns_none_regime(tmp_path):
 
 async def test_cvm_mode_returns_bound_bundle(tmp_path):
     provider = CvmAttestationProvider(
-        lambda ch: {"regime": "tdx-onchain", "challenge": ch, "intel_quote": "0400..."}
+        lambda ch, rd=None: {"regime": "tdx-onchain", "challenge": ch, "intel_quote": "0400..."}
     )
     app, registry = _app(tmp_path, provider)
     priv, pub = _keypair()
@@ -69,9 +69,38 @@ async def test_cvm_mode_returns_bound_bundle(tmp_path):
     assert resp.json()["regime"] == "tdx-onchain"
 
 
+async def test_cvm_quote_binds_session_pub_hash(tmp_path):
+    # KEYSTONE: the report_data POSTed to GetQuote must bind BOTH pubkeys —
+    # report_data[0:32] = challenge (SHA-256 client eph_pub), report_data[32:64] = SHA-256(session_pub).
+    # Capture what the provider passes to the fetch and assert the second half is SHA-256(session_pub).
+    import hashlib
+
+    session_pub = bytes(range(32))  # raw 32-byte X25519 session pubkey
+    seen: dict = {}
+
+    def fetch(ch, rd=None):
+        seen["report_data"] = rd
+        return {"regime": "tdx-onchain", "challenge": ch, "intel_quote": "0400..."}
+
+    provider = CvmAttestationProvider(fetch, session_pub=session_pub)
+    app, registry = _app(tmp_path, provider)
+    priv, pub = _keypair()
+    registry.register(ACCT, pub, pub)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get(f"{PATH}?challenge=abc123", headers=_headers(priv, ACCT, PATH))
+    assert resp.status_code == 200
+    rd = seen["report_data"]
+    # report_data = challenge ‖ SHA-256(session_pub). The challenge is unchanged; the appended
+    # 64-hex tail is the session_pub hash the agent writes to report_data[32:64].
+    assert rd == "abc123" + hashlib.sha256(session_pub).hexdigest()
+    assert rd.startswith("abc123") and len(hashlib.sha256(session_pub).hexdigest()) == 64
+    # The evidence carries session_pub (base64) for the client to re-hash and match against [32:64].
+    assert resp.json()["session_pub"] == base64.b64encode(session_pub).decode()
+
+
 async def test_cvm_unbound_challenge_is_503(tmp_path):
     # the fetched bundle's challenge does NOT match the request -> fail-closed 503
-    provider = CvmAttestationProvider(lambda ch: {"regime": "tdx-onchain", "challenge": "WRONG"})
+    provider = CvmAttestationProvider(lambda ch, rd=None: {"regime": "tdx-onchain", "challenge": "WRONG"})
     app, registry = _app(tmp_path, provider)
     priv, pub = _keypair()
     registry.register(ACCT, pub, pub)
@@ -90,7 +119,7 @@ async def test_missing_challenge_422(tmp_path):
 
 
 async def test_cvm_fetch_network_error_is_503_not_500(tmp_path):
-    def boom(challenge):
+    def boom(challenge, report_data=None):
         raise ConnectionError("dstack agent unreachable")
 
     app, registry = _app(tmp_path, CvmAttestationProvider(boom))
@@ -102,7 +131,7 @@ async def test_cvm_fetch_network_error_is_503_not_500(tmp_path):
 
 
 async def test_cvm_bundle_without_challenge_key_is_503(tmp_path):
-    app, registry = _app(tmp_path, CvmAttestationProvider(lambda ch: {"regime": "tdx-onchain"}))
+    app, registry = _app(tmp_path, CvmAttestationProvider(lambda ch, rd=None: {"regime": "tdx-onchain"}))
     priv, pub = _keypair()
     registry.register(ACCT, pub, pub)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:

@@ -26,6 +26,12 @@ const CHALLENGE_HEX: &str = "a49d15e53c99ece49b4bbd54e4b92ba9eec3449a01ba148ab96
 const APP_ID: &str = "64111f5c9442480b82b865f30e4085035a5e790b";
 const COMPOSE_HASH: &str = "d95a0706c94055db38c3d26de7933f2c66a3b8c0da0a2b73bd3f85a0c1b0c90c";
 
+// Placeholder 32-byte CVM X25519 session pubkey for the §4.6b binding (CC-1/ATT-1/GW-2/NEW-1).
+// The live fixture predates the binding (report_data[32:64] = 0), so SHA-256(SESSION_PUB) can
+// never match it — only the patched gateway emits a quote that binds a real session_pub here.
+// Tests that expect ok=true are #[ignore]'d until the fixture is regenerated from that gateway.
+const SESSION_PUB: [u8; 32] = [0x11u8; 32];
+
 // Documented prefix of the §4.3 measurement aggregate (mr_td ‖ rtmr0) from RESULT.md. rtmr1/rtmr2
 // are not in RESULT.md, so the full aggregate is derived from the live quote via `measurement_of`.
 const MR_TD_RTMR0_PREFIX: &str = concat!(
@@ -53,8 +59,9 @@ fn full_pin() -> PinnedSet {
 }
 
 #[test]
+#[ignore = "fixture predates session_pub binding (CC-1); regenerated from the patched gateway at redeploy"]
 fn live_quote_verifies_ok() {
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &full_pin());
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &full_pin());
     assert!(v.ok, "expected ok=true, got {v:?}");
     assert_eq!(v.reason, VerdictReason::Ok);
     assert!(v.measurement_matched);
@@ -76,7 +83,7 @@ fn tamper_quote_signature_fails_closed() {
     // (the collateral supplies the PCK chain, so a tail flip would be a no-op).
     let mut q = quote_bytes();
     q[100] ^= 0xFF;
-    let v = verify_quote(&q, COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &full_pin());
+    let v = verify_quote(&q, COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &full_pin());
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::QuoteSigInvalid, "got {v:?}");
 }
@@ -85,7 +92,7 @@ fn tamper_quote_signature_fails_closed() {
 fn stale_now_after_collateral_window_fails_closed() {
     // `now` past the collateral next_update -> COLLATERAL_STALE (expired TCB info / QE identity).
     let future = 1_900_000_000u64; // ~2030
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), future, CHALLENGE_HEX, &full_pin());
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), future, CHALLENGE_HEX, &SESSION_PUB, &full_pin());
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::CollateralStale, "got {v:?}");
 }
@@ -95,7 +102,7 @@ fn unpinned_measurement_fails_closed() {
     // A pin whose measurement does not match the quote -> MEASUREMENT_UNPINNED, measurement_matched=false.
     let wrong = "00".repeat(4 * 48); // wrong 192-byte aggregate
     let pinned = PinnedSet::from_lists(&[wrong.as_str()], &[COMPOSE_HASH], &[APP_ID]);
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &pinned);
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &pinned);
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::MeasurementUnpinned, "got {v:?}");
     assert!(!v.measurement_matched);
@@ -104,7 +111,7 @@ fn unpinned_measurement_fails_closed() {
 #[test]
 fn unpinned_compose_hash_fails_closed() {
     let pinned = PinnedSet::from_lists(&[&measurement()], &["deadbeef"], &[APP_ID]);
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &pinned);
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &pinned);
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::ComposeMismatch, "got {v:?}");
     assert!(v.measurement_matched, "measurement matched before the compose check");
@@ -113,7 +120,7 @@ fn unpinned_compose_hash_fails_closed() {
 #[test]
 fn unpinned_app_id_fails_closed() {
     let pinned = PinnedSet::from_lists(&[&measurement()], &[COMPOSE_HASH], &["not-our-app"]);
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &pinned);
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &pinned);
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::AppIdMismatch, "got {v:?}");
 }
@@ -122,23 +129,40 @@ fn unpinned_app_id_fails_closed() {
 fn wrong_challenge_binding_fails_closed() {
     // A different challenge (not the one bound into report_data[0:32]) -> BINDING_MISMATCH.
     let wrong = "00".repeat(32);
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, &wrong, &full_pin());
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, &wrong, &SESSION_PUB, &full_pin());
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::BindingMismatch, "got {v:?}");
 }
 
 #[test]
+fn old_fixture_without_session_binding_fails_closed() {
+    // CC-1/ATT-1/GW-2/NEW-1: the §4.6b session binding (report_data[32:64] == SHA-256(session_pub))
+    // is what stops a relay from swapping its own X25519 session key. The pre-patch live fixture
+    // has report_data[32:64] = 0, which can never equal SHA-256(SESSION_PUB) — so even with the
+    // client challenge AND the full measurement/compose/app-id pin all correct, verification fails
+    // closed at §4.6b. This is the regression test that the binding is actually enforced (it runs
+    // today against the old fixture; live_quote_verifies_ok flips back on once the gateway-regenerated
+    // fixture binds a real session_pub here).
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &full_pin());
+    assert!(!v.ok);
+    assert_eq!(v.reason, VerdictReason::BindingMismatch, "got {v:?}");
+}
+
+#[test]
+#[ignore = "fixture predates session_pub binding (CC-1); regenerated from the patched gateway at redeploy"]
 fn explicit_no_log_false_fails_closed() {
-    // The measured info asserting no_log:false fails §4.7 even with everything else pinned.
+    // The measured info asserting no_log:false fails §4.7 even with everything else pinned. This
+    // needs a session_pub-binding quote to REACH §4.7 (the old fixture fails at §4.6b first), so
+    // it's #[ignore]'d until the fixture is regenerated from the patched gateway.
     let info = format!(r#"{{"compose_hash":"{COMPOSE_HASH}","app_id":"{APP_ID}","no_log":false}}"#);
-    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info, NOW_SECS, CHALLENGE_HEX, &full_pin());
+    let v = verify_quote(&quote_bytes(), COLLATERAL_JSON, &info, NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &full_pin());
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::NoLogAbsent, "got {v:?}");
 }
 
 #[test]
 fn malformed_collateral_fails_closed() {
-    let v = verify_quote(&quote_bytes(), "{not valid collateral}", &info_json(), NOW_SECS, CHALLENGE_HEX, &full_pin());
+    let v = verify_quote(&quote_bytes(), "{not valid collateral}", &info_json(), NOW_SECS, CHALLENGE_HEX, &SESSION_PUB, &full_pin());
     assert!(!v.ok);
     assert_eq!(v.reason, VerdictReason::CollateralStale, "got {v:?}");
 }

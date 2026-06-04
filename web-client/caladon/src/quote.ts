@@ -21,6 +21,12 @@
  *     mr_owner_config    48     -> rt_mr0 begins here
  *     rt_mr0..rt_mr3   4×48
  *     report_data        64
+ *
+ * report_data (64 bytes) is written VERBATIM by dstack GetQuote and binds BOTH session keys:
+ *   report_data[0:32]  = SHA-256(client_eph_pub)   — the channel "challenge" (reportDataChallenge)
+ *   report_data[32:64] = SHA-256(cvm_session_pub)  — the gateway X25519 session pub (KEYSTONE binding)
+ * (each hash is over the RAW 32-byte public key bytes). The client's verify_quote_sync checks both;
+ * this module only extracts the measurement aggregate + the challenge half for pinning/diagnostics.
  */
 
 import { toHex } from './bytes.js';
@@ -38,7 +44,8 @@ export interface TdxMeasurements {
   rtmr3: string;
   /** lowercase-hex aggregate mr_td ‖ rtmr0 ‖ rtmr1 ‖ rtmr2 — the value to pin. */
   aggregate: string;
-  /** the 32-byte challenge bound into report_data[0:32], lowercase hex. */
+  /** the 32-byte challenge bound into report_data[0:32] = SHA-256(client_eph_pub), lowercase hex.
+   *  (report_data[32:64] = SHA-256(cvm_session_pub) is verified in verify_quote_sync, not here.) */
   reportDataChallenge: string;
 }
 

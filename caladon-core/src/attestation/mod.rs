@@ -35,10 +35,17 @@
 //!       report_data: [u8;64], plus mr_seam/mr_signer_seam/td_attributes/xfam/mr_config_id/...
 //!     (NOTE: field is `rt_mr0` not `rt_mr_0`; `mr_td` not `mrtd`.) TD15 adds `mr_service_td`.
 //!
-//!   * report_data: dstack writes the 32-byte client challenge VERBATIM into report_data[0:32]
-//!     (the rest zero-padded to 64) — see the internal deploy notes §"key unknown". The
-//!     challenge itself = lowercase-hex SHA-256(eph_pub) (spike-notes (c)). So §4.6 binding =
-//!     `report_data[0:32] == hex_decode(expected_challenge_hex)`.
+//!   * report_data: dstack writes 64 bytes VERBATIM into the quote's report_data. The PATCHED
+//!     gateway packs BOTH channel-binding halves (CC-1/ATT-1/GW-2/NEW-1 keystone fix):
+//!       report_data[0:32]  = SHA-256(client_eph_pub)   (the client challenge; lowercase hex of
+//!                            THIS lands in `expected_challenge_hex` — spike-notes (c)),
+//!       report_data[32:64] = SHA-256(cvm_session_pub)  (the CVM X25519 session pubkey, carried
+//!                            base64 in `ev.session_pub`).
+//!     Both hashes are SHA-256 over the RAW 32-byte pubkey bytes (NOT base64/hex). So §4.6 binding =
+//!     `report_data[0:32] == hex_decode(expected_challenge_hex)` AND §4.6b session binding =
+//!     `report_data[32:64] == SHA-256(expected_session_pub)` — without §4.6b a malicious relay
+//!     could substitute its own session_pub (delivered out-of-band) and MITM the sealed channel.
+//!     (The pre-patch live fixture has report_data[32:64] = 0; see tests/attestation.rs.)
 //! ==========================================================================================
 //!
 //! compose_hash / app_id are NOT in the quote — they live in the dstack `info` JSON (POST /Info),
@@ -96,18 +103,23 @@ mod imp {
     ///   §4.4      compose_hash pin (from `info`)        (FAIL: COMPOSE_MISMATCH)
     ///   §4.5      app_id pin (from `info`)              (FAIL: APPID_MISMATCH)
     ///   §4.6      report_data[0:32] == challenge        (FAIL: BINDING_MISMATCH)
+    ///   §4.6b     report_data[32:64] == SHA-256(session_pub) (FAIL: BINDING_MISMATCH)
     ///   §4.7      no-log posture                        (FAIL: NO_LOG_ABSENT)
     /// Returns ok=true ONLY if every step passes. NO LOGGING of any field (no-log posture).
     ///
     /// `collateral_json` is `dcap_qvl::QuoteCollateralV3` serialized to JSON (fetched by the
     /// native helper or, on wasm, by JS). `info_json` is the dstack POST /Info body.
-    /// `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the 32-byte channel binding).
+    /// `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the 32-byte client binding).
+    /// `expected_session_pub` is the RAW 32-byte CVM X25519 session pubkey (decoded from
+    /// `ev.session_pub`); §4.6b checks report_data[32:64] == SHA-256(session_pub) so the relay
+    /// cannot substitute its own session key — the binding MUST hold before any sealing.
     pub fn verify_quote(
         quote_bytes: &[u8],
         collateral_json: &str,
         info_json: &str,
         now_secs: u64,
         expected_challenge_hex: &str,
+        expected_session_pub: &[u8],
         pinned: &PinnedSet,
     ) -> Verdict {
         // --- §4.1-4.2: cryptographic chain to the Intel root + TCB validity (dcap-qvl). ---
@@ -173,6 +185,20 @@ mod imp {
             _ => return Verdict::fail_with_measurement(VerdictReason::BindingMismatch, true),
         };
         if td.report_data[..32] != expected[..] {
+            return Verdict::fail_with_measurement(VerdictReason::BindingMismatch, true);
+        }
+
+        // --- §4.6b: session binding — report_data[32:64] == SHA-256(cvm_session_pub). ---
+        // The CVM X25519 session pubkey is delivered out-of-band (ev.session_pub); without this
+        // check a malicious relay could swap its own session key, derive SK with the client, and
+        // MITM the sealed channel even though the quote (which only binds the client eph_pub at
+        // [0:32]) verifies. We hash the RAW 32-byte session pub and require it at [32:64].
+        let session_pub_hash = {
+            let mut h = Sha256::new();
+            h.update(expected_session_pub);
+            h.finalize()
+        };
+        if td.report_data[32..64] != session_pub_hash[..] {
             return Verdict::fail_with_measurement(VerdictReason::BindingMismatch, true);
         }
 

@@ -21,8 +21,12 @@ use crate::{kdf, padding, passkey, seed_auth, seed_codec, session};
 ///
 /// `pinned_json` is `{ "measurements": [...], "compose_hashes": [...], "workload_ids": [...] }`
 /// (the client-shipped pin list; no TOFU). `collateral_json` is the PCS collateral JSON the JS
-/// host fetched. Never throws on a verification FAILURE — it returns a failing `Verdict` so the
-/// caller can branch on the specific reason; it only throws if `pinned_json` is unparseable.
+/// host fetched. `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the §4.6 client
+/// binding); `expected_session_pub` is the RAW 32-byte CVM X25519 session pubkey (the JS host
+/// base64-decodes `ev.session_pub`) — §4.6b checks report_data[32:64] == SHA-256(session_pub) so a
+/// relay cannot substitute its own session key. Never throws on a verification FAILURE — it returns
+/// a failing `Verdict` so the caller can branch on the specific reason; it only throws if
+/// `pinned_json` is unparseable.
 #[wasm_bindgen]
 pub fn verify_quote_sync(
     quote_bytes: &[u8],
@@ -30,6 +34,7 @@ pub fn verify_quote_sync(
     info_json: &str,
     now_secs: u64,
     expected_challenge_hex: &str,
+    expected_session_pub: &[u8],
     pinned_json: &str,
 ) -> Result<JsValue, JsError> {
     let pinned = parse_pinned(pinned_json)?;
@@ -39,6 +44,7 @@ pub fn verify_quote_sync(
         info_json,
         now_secs,
         expected_challenge_hex,
+        expected_session_pub,
         &pinned,
     );
     serde_wasm_bindgen::to_value(&verdict).map_err(|e| JsError::new(&e.to_string()))

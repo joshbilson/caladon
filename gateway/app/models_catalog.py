@@ -65,8 +65,10 @@ async def is_attested(model: str, *, base_url: str, api_key: str, transport=None
     if not model or not model.startswith(ATTESTED_PREFIX):
         return False
     models = await fetch_attested_models(base_url=base_url, api_key=api_key, transport=transport)
-    # If the catalog is unreachable (empty), accept a well-formed attested-prefix slug rather
-    # than hard-failing every turn — the prefix already constrains to the TEE namespace.
+    # Fail CLOSED: an empty catalog (unreachable / not yet confirmed) means we cannot POSITIVELY
+    # verify this slug is TEE-served — the `phala/` prefix is attacker-controllable metadata, not
+    # proof. Return False so the caller keeps the configured attested default instead of honoring
+    # an unverified per-request slug. Membership is granted only against a confirmed live catalog.
     if not models:
-        return True
+        return False
     return any(m["id"] == model for m in models)

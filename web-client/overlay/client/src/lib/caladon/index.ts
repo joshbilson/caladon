@@ -56,11 +56,32 @@ function readPinned(): PinnedSet | undefined {
  * Attestation policy (SURGERY.md §D3.2). Default 'strict' — fail-closed. A dev build may set
  * VITE_CALADON_ATTESTATION=skip|observe for plaintext-debug round-trips ONLY; never a hosted
  * default. Plumbed through so the gate is a deploy decision, not a code edit.
+ *
+ * CS-2/ATT-3 production guard: a build-time env var must NEVER be able to silently fail-open
+ * attestation in a hosted/production build — that would deliver WMK + prompts to an unverified
+ * gateway. So in a PROD build we REFUSE to honor any non-'strict' policy and HARD-FAIL at client
+ * init (throw), rather than quietly weakening the gate. 'observe'/'skip' are permitted ONLY in a
+ * DEV build, or behind the explicit VITE_CALADON_ALLOW_INSECURE=1 escape hatch (loudly warned).
  */
 function readPolicy(): CaladonClientConfig['attestationPolicy'] {
   const raw = import.meta.env?.VITE_CALADON_ATTESTATION as string | undefined;
-  if (raw === 'skip' || raw === 'observe' || raw === 'strict') return raw;
-  return 'strict';
+  if (raw !== 'skip' && raw !== 'observe' && raw !== 'strict') return 'strict';
+  if (raw === 'strict') return raw;
+
+  // Non-strict ('observe'/'skip') requested. Only allow it in a dev build or behind the explicit
+  // escape hatch; otherwise refuse loudly so an insecure policy can never reach a hosted build.
+  const allowInsecure = (import.meta.env?.VITE_CALADON_ALLOW_INSECURE as string | undefined) === '1';
+  if (import.meta.env?.DEV || allowInsecure) {
+    console.warn(
+      `[caladon] INSECURE attestation policy '${raw}' — the fail-closed gate is DISABLED. ` +
+        'WMK + prompts may be delivered to an UNVERIFIED gateway. NEVER ship this in production.',
+    );
+    return raw;
+  }
+  throw new CaladonError(
+    `refusing insecure attestation policy '${raw}' in a production build: only 'strict' is ` +
+      'permitted (set VITE_CALADON_ALLOW_INSECURE=1 to override, dev only)',
+  );
 }
 
 let client: CaladonClient | null = null;

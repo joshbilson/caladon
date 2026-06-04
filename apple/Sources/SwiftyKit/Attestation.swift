@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// The attestation verifier KEYSTONE decision core (contracts/attestation.md §4,
@@ -53,14 +54,16 @@ public struct VerifiedQuote: Sendable {
     public let measurement: String   // mrtd/rtmr aggregate (TDX) or image digest (SEV)
     public let composeHash: String   // dstack compose hash (TDX) / config hash (SEV)
     public let workloadID: String    // app_id (TDX) / repo+digest (SEV)
-    public let reportData: String    // the challenge bound into the quote
+    public let reportData: String    // report_data[0:32] = SHA-256(eph_pub), the challenge binding
+    public let sessionBinding: String  // report_data[32:64] = SHA-256(cvm_session_pub), bound into the quote
     public let noLog: Bool           // measured-config asserts no-logging (§4.7)
     public init(measurement: String, composeHash: String, workloadID: String,
-                reportData: String, noLog: Bool) {
+                reportData: String, sessionBinding: String, noLog: Bool) {
         self.measurement = measurement
         self.composeHash = composeHash
         self.workloadID = workloadID
         self.reportData = reportData
+        self.sessionBinding = sessionBinding
         self.noLog = noLog
     }
 }
@@ -94,8 +97,13 @@ public struct Attestation: Sendable {
     }
 
     /// Fail-closed verification (attestation.md §4 order). `expectedChallenge` is the
-    /// client's `SHA-256(eph_pub)`. Every non-ok path returns ok=false with a distinct reason.
-    public func verify(_ evidence: Evidence, expectedChallenge: String) -> Verdict {
+    /// client's `SHA-256(eph_pub)` and binds `report_data[0:32]`; `sessionPub` is the CVM's
+    /// X25519 session pubkey (raw 32 bytes, carried in untrusted `ev.session_pub`) which the
+    /// quote MUST attest at `report_data[32:64] = SHA-256(session_pub)`. We trust `sessionPub`
+    /// ONLY because the verified quote binds it — a relay that swaps in its own session_pub
+    /// fails this check (BINDING_MISMATCH), so the caller never derives SK against an attacker.
+    /// Every non-ok path returns ok=false with a distinct reason.
+    public func verify(_ evidence: Evidence, expectedChallenge: String, sessionPub: Data) -> Verdict {
         guard evidence.regime != .none else {
             return Verdict(ok: false, reason: .regimeUnsupported)
         }
@@ -119,8 +127,16 @@ public struct Attestation: Sendable {
         guard pinned.workloadIDs.contains(quote.workloadID) else {
             return Verdict(ok: false, reason: .appIDMismatch)
         }
-        // §4.6 channel binding
+        // §4.6 channel binding — report_data[0:32] == SHA-256(eph_pub)
         guard quote.reportData == expectedChallenge else {
+            return Verdict(ok: false, reason: .bindingMismatch)
+        }
+        // §4.6 session binding — report_data[32:64] == SHA-256(cvm_session_pub). The hash is
+        // over the RAW 32-byte X25519 pubkey (NOT base64/hex), lowercase-hex to match the
+        // quote's attested binding. Without this, a relay could substitute its own session_pub
+        // and the client would seal the WMK/prompts to the attacker even though the quote verifies.
+        let sessionChallenge = SHA256.hash(data: sessionPub).map { String(format: "%02x", $0) }.joined()
+        guard quote.sessionBinding == sessionChallenge else {
             return Verdict(ok: false, reason: .bindingMismatch)
         }
         // §4.7 no-log posture

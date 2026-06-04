@@ -40,13 +40,22 @@ export interface CaladonWasm {
   seal_chat(sessionKey: Uint8Array, plaintext: Uint8Array, accountId: string, v: bigint): Uint8Array;
   /** Open a sealed live-turn payload under SK. `nonce_ct` is `nonce ‖ ct`. */
   open_chat(sessionKey: Uint8Array, nonceCt: Uint8Array, accountId: string, v: bigint): Uint8Array;
-  /** Fail-closed TDX verdict. Collateral is JS-fetched and passed in. */
+  /**
+   * Fail-closed TDX verdict. Collateral is JS-fetched and passed in.
+   *
+   * Binds BOTH halves of report_data: `expectedChallengeHex` is checked against
+   * report_data[0:32] == SHA-256(client_eph_pub), and `expectedSessionPub` (the raw 32-byte gateway
+   * X25519 session pub) is checked against report_data[32:64] == SHA-256(session_pub). A mismatch on
+   * either is a BindingMismatch => the verdict is not ok (the caller refuses). This is what makes the
+   * out-of-band session_pub attested rather than relay-substitutable.
+   */
   verify_quote_sync(
     quoteBytes: Uint8Array,
     collateralJson: string,
     infoJson: string,
     nowSecs: bigint,
     expectedChallengeHex: string,
+    expectedSessionPub: Uint8Array,
     pinnedJson: string,
   ): unknown;
   /** Passkey-PRF custody: wrapping key = HKDF-SHA256(prf32, "caladon/passkey-wrapping/v1"). */

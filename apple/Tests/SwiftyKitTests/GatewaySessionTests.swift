@@ -14,12 +14,17 @@ private let ACCT = "acct_0123456789abcdef"
 private let PINNED = PinnedSet(measurements: ["M1"], composeHashes: ["C1"], workloadIDs: ["W1"])
 private let WMK = Data(repeating: 0xAB, count: 32)
 
-/// Verifier that echoes the evidence's `challenge` as the quote reportData, so the channel
-/// binding check passes for whatever ephemeral challenge the client generated.
+/// Verifier that echoes the evidence's `challenge` as the quote reportData (so the §4.6 channel
+/// binding passes for whatever ephemeral challenge the client generated) AND derives the §4.6b
+/// session binding = SHA-256(session_pub) from the evidence's own session_pub — exactly what a real
+/// QuoteVerifier reads out of the attested report_data[32:64]. So the keystone binding check passes
+/// for the honest sim and would fail if the relay had swapped session_pub.
 private struct EchoVerifier: QuoteVerifier {
     func verify(regime: Regime, raw: [String: String]) -> Result<VerifiedQuote, VerdictReason> {
-        .success(VerifiedQuote(measurement: "M1", composeHash: "C1", workloadID: "W1",
-                               reportData: raw["challenge"] ?? "", noLog: true))
+        let sessionPub = Data(base64Encoded: raw["session_pub"] ?? "") ?? Data()
+        let sessionBinding = SHA256.hash(data: sessionPub).map { String(format: "%02x", $0) }.joined()
+        return .success(VerifiedQuote(measurement: "M1", composeHash: "C1", workloadID: "W1",
+                               reportData: raw["challenge"] ?? "", sessionBinding: sessionBinding, noLog: true))
     }
 }
 

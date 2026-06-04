@@ -10,6 +10,7 @@ no remote TEE to attest (operator == user).
 from __future__ import annotations
 
 import base64
+import hashlib
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
@@ -35,13 +36,26 @@ class CvmAttestationProvider:
     `challenge` bound into it (contracts/attestation-evidence.md §1). `fetch_quote` is
     wired to the dstack guest agent at CVM deploy; tests inject a fake."""
 
-    def __init__(self, fetch_quote: Callable[[str], dict], session_pub: bytes | None = None) -> None:
+    def __init__(
+        self,
+        fetch_quote: Callable[[str, str | None], dict],
+        session_pub: bytes | None = None,
+    ) -> None:
         self._fetch = fetch_quote
         self._session_pub = session_pub
 
     def evidence_for(self, challenge: str) -> dict:
+        # Bind BOTH pubkeys into the quote's report_data (64 bytes):
+        #   report_data[0:32]  = SHA-256(client eph_pub)  == the client `challenge` (64 hex)
+        #   report_data[32:64] = SHA-256(cvm session_pub) (64 hex)
+        # We POST the concatenated 128-hex string to /GetQuote so the dstack agent writes it
+        # VERBATIM into the TDX quote. When there is no session key (non-cvm/plain), bind the
+        # challenge alone (no second half) so plain quotes still verify report_data[0:32].
+        report_data = challenge
+        if self._session_pub is not None:
+            report_data = challenge + hashlib.sha256(self._session_pub).hexdigest()
         try:
-            bundle = self._fetch(challenge)
+            bundle = self._fetch(challenge, report_data)
         except AttestationError:
             raise
         except Exception as exc:  # noqa: BLE001 - any fetch/parse failure -> fail closed (503)
@@ -50,13 +64,13 @@ class CvmAttestationProvider:
         # carry THIS challenge (else a stale/replayed quote could be served).
         if bundle.get("challenge") != challenge:
             raise AttestationError("challenge not bound in evidence")
-        # The CVM's X25519 session pubkey (§6): the client derives SK against it to deliver
-        # WMK. Our dstack /GetQuote binds the CHALLENGE (= SHA-256(client eph_pub)) verbatim into
-        # report_data[0:32] (report_data[32:64]=0); session_pub is carried alongside the quote
-        # here. HARDENING (deferred to the client live-verify rework, step 3): also bind
-        # session_pub into report_data (e.g. report_data = challenge ‖ session_pub) so the
-        # verified quote itself vouches for the session key, closing a session_pub-substitution
-        # MITM. Today the §6 KDF already binds both pubs (anti-UKS), so a swap yields a dead SK.
+        # The CVM's X25519 session pubkey (§6): the client derives SK against it to deliver WMK.
+        # IMPLEMENTED (was deferred): the quote now binds session_pub too, so the verified quote
+        # itself vouches for the session key — report_data = challenge ‖ SHA-256(session_pub),
+        # i.e. report_data[0:32]=SHA-256(client eph_pub), report_data[32:64]=SHA-256(session_pub).
+        # The client re-derives SHA-256(decoded session_pub) and refuses (BindingMismatch) unless
+        # it equals report_data[32:64], closing the session_pub-substitution MITM BEFORE deriving
+        # SK. The §6 KDF additionally binds both pubs (anti-UKS), so even a swap yields a dead SK.
         if self._session_pub is not None:
             bundle = {**bundle, "session_pub": base64.b64encode(self._session_pub).decode()}
         return bundle

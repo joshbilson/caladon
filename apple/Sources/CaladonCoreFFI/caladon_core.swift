@@ -1252,8 +1252,12 @@ public func unpad(padded: Data)throws  -> Data {
  * Fail-closed verification with collateral PASSED IN (offline/deterministic — the Swift
  * `DcapVerifier` fetches PCS collateral and hands it here). Never throws on a verification
  * FAILURE: returns a `Verdict` with `ok=false` and the specific reason.
+ * `expected_challenge_hex` is lowercase-hex SHA-256(eph_pub) (the §4.6 client binding);
+ * `expected_session_pub` is the RAW 32-byte CVM X25519 session pubkey (the caller base64-decodes
+ * `ev.session_pub`) — §4.6b checks report_data[32:64] == SHA-256(session_pub) so a relay cannot
+ * substitute its own session key and MITM the sealed channel.
  */
-public func verifyQuote(quoteBytes: Data, collateralJson: String, infoJson: String, nowSecs: UInt64, expectedChallengeHex: String, pinned: PinnedSet) -> Verdict {
+public func verifyQuote(quoteBytes: Data, collateralJson: String, infoJson: String, nowSecs: UInt64, expectedChallengeHex: String, expectedSessionPub: Data, pinned: PinnedSet) -> Verdict {
     return try!  FfiConverterTypeVerdict.lift(try! rustCall() {
     uniffi_caladon_core_fn_func_verify_quote(
         FfiConverterData.lower(quoteBytes),
@@ -1261,6 +1265,7 @@ public func verifyQuote(quoteBytes: Data, collateralJson: String, infoJson: Stri
         FfiConverterString.lower(infoJson),
         FfiConverterUInt64.lower(nowSecs),
         FfiConverterString.lower(expectedChallengeHex),
+        FfiConverterData.lower(expectedSessionPub),
         FfiConverterTypePinnedSet.lower(pinned),$0
     )
 })
@@ -1330,7 +1335,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_caladon_core_checksum_func_unpad() != 5473) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_caladon_core_checksum_func_verify_quote() != 62102) {
+    if (uniffi_caladon_core_checksum_func_verify_quote() != 25007) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_caladon_core_checksum_func_x25519_public() != 44449) {

@@ -76,7 +76,17 @@ public struct GatewayClient: Sendable {
         guard status == 200 else { throw GatewayError.http(status) }
 
         let evidence = try Self.parseEvidence(data)
-        let verdict = attestation.verify(evidence, expectedChallenge: expectedChallenge)
+        // The CVM X25519 session_pub arrives in UNTRUSTED evidence; we decode it here and feed
+        // it INTO the fail-closed verifier, which requires the verified quote to attest
+        // report_data[32:64] == SHA-256(session_pub). A relay that swaps session_pub fails that
+        // bind (BINDING_MISMATCH) — so we never derive SK against an attacker. session_pub MUST
+        // be present (absence => fail-closed: there is nothing the quote can bind against).
+        guard let spB64 = evidence.raw["session_pub"], let sessionPub = Data(base64Encoded: spB64) else {
+            throw GatewayError.attestationFailed(.bindingMismatch)
+        }
+        let verdict = attestation.verify(
+            evidence, expectedChallenge: expectedChallenge, sessionPub: sessionPub
+        )
         guard verdict.ok else { throw GatewayError.attestationFailed(verdict.reason) }
         return evidence
     }
@@ -105,6 +115,10 @@ public struct GatewayClient: Sendable {
         let (ephPriv, ephPub) = Session.x25519Keypair()
         let challenge = Self.challenge(forEphemeralPub: ephPub)
         let evidence = try await fetchVerifiedEvidence(expectedChallenge: challenge)
+        // fetchVerifiedEvidence already proved the quote attests SHA-256(session_pub) at
+        // report_data[32:64], so this `cvmPub` is the SAME bytes the enclave bound — we derive
+        // SK against the attested session key, not a relay's substitute. (Same decode as the
+        // verifier; absence/garbage is already fail-closed above, so this guard is belt-and-braces.)
         guard let spB64 = evidence.raw["session_pub"], let cvmPub = Data(base64Encoded: spB64) else {
             throw GatewayError.decode
         }

@@ -41,6 +41,7 @@ def test_fetch_builds_bound_bundle():
     fetch = _dstack_fetch("http://dstack/GetQuote", transport=_agent(captured=captured))
     bundle = fetch(CHALLENGE)
     # Request shape: POST /GetQuote with report_data == the challenge (snake_case, not "nonce").
+    # No session_pub binding here -> the 1-arg fetch posts the challenge alone (report_data[32:64]=0).
     get = next(b for p, b in captured if p.endswith("/GetQuote"))
     assert get == {"report_data": CHALLENGE}
     assert any(p.endswith("/Info") for p, _ in captured)
@@ -51,6 +52,20 @@ def test_fetch_builds_bound_bundle():
     assert bundle["event_log"] == "[]"
     assert bundle["info"]["compose_hash"] == "c0ffee"
     assert bundle["info"]["app_id"] == "app123"
+
+
+def test_fetch_posts_full_report_data_when_session_bound():
+    # When the provider supplies a 128-hex report_data (challenge ‖ SHA-256(session_pub)), the
+    # fetch POSTs it verbatim so the agent writes BOTH halves into the quote, not just [0:32].
+    captured: list = []
+    sp_hash = "cd" * 32  # stand-in SHA-256(session_pub); 64 hex
+    rd = CHALLENGE + sp_hash  # 128 hex == 64 bytes
+    fetch = _dstack_fetch("http://dstack/GetQuote", transport=_agent(report_data=rd, captured=captured))
+    bundle = fetch(CHALLENGE, rd)
+    get = next(b for p, b in captured if p.endswith("/GetQuote"))
+    assert get == {"report_data": rd}
+    # The bundle still carries the (client) challenge unchanged, not the full report_data.
+    assert bundle["challenge"] == CHALLENGE
 
 
 def test_fetch_rejects_unbound_report_data():
