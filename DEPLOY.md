@@ -17,6 +17,24 @@ phone ──TLS──▶ app.caladon.ai ─(dstack-ingress, TLS terminated IN-CV
 
 Compose: [`infra/cvm/dstack-compose.caladon-app.yml`](infra/cvm/dstack-compose.caladon-app.yml).
 
+## Two topologies — pick one
+
+| | **A. Bundled (this runbook)** | **B. Web-only relay** |
+|---|---|---|
+| Compose | [`dstack-compose.caladon-app.yml`](infra/cvm/dstack-compose.caladon-app.yml) | [`dstack-compose.caladon-web.yml`](infra/cvm/dstack-compose.caladon-web.yml) |
+| Runs in the CVM | web (SPA+shim) **+** gateway **+** ingress | web (SPA+shim) **+** ingress only |
+| Inference key in this CVM | **yes** (`GATEWAY_INFERENCE_KEY`, dstack-sealed) | **no** — relays to an existing attested gateway |
+| Pin baked into the SPA | THIS CVM's gateway pin (two-pass: deploy → pin → rebuild → redeploy) | the **existing gateway's** already-known pin (single pass) |
+| When to use | you want one fully self-contained attested deployment | you already run a proven attested gateway (e.g. `gw.caladon.ai`) and just want a web front door for it |
+
+**The live `app.caladon.ai` runs topology B** — a fresh web-only CVM relaying to the existing,
+proven `gw.caladon.ai` gateway, so the SPA pins that gateway's known measurement and there's no
+fresh-gateway two-pass pin dance. The steps below document topology A (the fuller, self-contained
+case); for B, the only differences are: skip the `gateway` service + `GATEWAY_INFERENCE_KEY`, set
+`CALADON_GATEWAY_BASE` to your existing gateway's public URL, and build the SPA with **that**
+gateway's pin (you already have it — no capture step). Everything else (ingress, CAA, secrets,
+domain) is identical.
+
 ## What this is (and is NOT) — claims discipline
 
 This is **attested confidential compute**, **not end-to-end encryption.** The browser

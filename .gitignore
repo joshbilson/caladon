@@ -53,3 +53,4 @@ apple/SwiftyApp/build/
 
 # Vendored LibreChat upstream for the web client — cloned by web-client/setup.sh, NOT committed (see web-client/SURGERY.md)
 web-client/librechat/
+infra/cvm/.env.caladon-web

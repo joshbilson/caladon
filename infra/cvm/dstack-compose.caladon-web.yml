@@ -1,0 +1,58 @@
+# Caladon web front-door — a fresh attested Phala CVM serving the SPA + relaying to the EXISTING
+# attested gateway at gw.caladon.ai. Reachable at https://app.caladon.ai.
+#
+# Why web-only (vs the bundled gateway+web in dstack-compose.caladon-app.yml): gw.caladon.ai is
+# already deployed + proven + its attestation pin is known, so we reuse it. The SPA is built with
+# that gw.caladon.ai pin (VITE_CALADON_PINNED), so the client verifies gw.caladon.ai's attestation
+# (strict, no-TOFU) exactly as in local testing — no fresh gateway, no two-pass pin, no RedPill key
+# in this CVM. The web container is a KEYLESS relay (NO keys, NO DB): it serves the static SPA and
+# forwards opaque sealed envelopes to the gateway; the browser (caladon-core WASM) does the sealing
+# + the attestation verify itself.
+#
+# Claims discipline: this is attested confidential compute, NOT E2EE. Plaintext is opened only in
+# the gateway's TEE (gw.caladon.ai), whose attested measurement the client pins and refuses to send
+# without. This web CVM only terminates TLS for app.caladon.ai and relays ciphertext.
+#
+# Secrets (CLOUDFLARE_API_TOKEN, CERTBOT_EMAIL) arrive dstack-SEALED via --env-file at deploy; they
+# are ${VARS} here (not literals, not in the measured compose, not in the image).
+services:
+  # The committed stateless shim serving the built SPA + proxying /api/caladon/* + /pcs-collateral/*
+  # to the EXTERNAL gw.caladon.ai. NO keys, NO DB.
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/joshbilson/caladon-web:v1}
+    restart: unless-stopped
+    environment:
+      CALADON_GATEWAY_BASE: ${CALADON_GATEWAY_BASE:-https://gw.caladon.ai}
+      CALADON_STATIC_DIR: ${CALADON_STATIC_DIR:-/srv/spa}
+      PORT: "8787"
+      CALADON_ALLOWED_ORIGINS: ${CALADON_ALLOWED_ORIGINS:-https://app.caladon.ai}
+      CALADON_COOKIE_SECURE: "true"
+      CALADON_PCS_BASE: ${CALADON_PCS_BASE:-https://api.trustedservices.intel.com}
+    expose:
+      - "8787"
+    logging:
+      driver: "none"
+
+  # Custom-domain TLS terminating INSIDE the CVM, targeting the web front door. Provisions a
+  # Let's Encrypt cert for app.caladon.ai via Cloudflare DNS-01 + writes a CAA record locking cert
+  # issuance to this TEE (same pattern as the proven gw-v1 deployment).
+  dstack-ingress:
+    image: dstacktee/dstack-ingress:20250924@sha256:40429d78060ef3066b5f93676bf3ba7c2e9ac47d4648440febfdda558aed4b32
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "443:443"
+    environment:
+      DOMAIN: ${CALADON_DOMAIN:-app.caladon.ai}
+      TARGET_ENDPOINT: http://web:8787
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      GATEWAY_DOMAIN: _.${DSTACK_GATEWAY_DOMAIN:-dstack-pha-prod5.phala.network}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL}
+      SET_CAA: "true"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - cert-data:/etc/letsencrypt
+
+volumes:
+  cert-data:
