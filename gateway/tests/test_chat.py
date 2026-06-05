@@ -98,6 +98,69 @@ async def test_sealed_round_trip(ctx):
     assert pt == b"Hi there"
 
 
+async def test_tool_loop_path(tmp_path, monkeypatch):
+    """tools:true routes the turn through the in-CVM tool loop on the function-calling model, seals
+    each tool step + the final answer, and never leaks plaintext."""
+    from app import inference_backend
+    from app.deps import get_receipt_fetcher
+
+    priv, pub = _keypair()
+    acct = derive_account_id(pub)
+    reg = AccountRegistry(tmp_path / "a.json")
+    reg.register(acct, base64.b64encode(pub).decode(), base64.b64encode(b"kem").decode())
+    mgr = sess.SessionManager()
+    cpriv, cpub = sess.x25519_keypair()
+    sk = sess.derive_session_key(cpriv, mgr.cvm_pub, client_pub=cpub, cvm_pub=mgr.cvm_pub)
+    wn, wa, wc = sess._seal(sk, b"\xab" * 32, account_id=acct, purpose=sess.WMK_DELIVERY_PURPOSE, v=1)
+    mgr.establish(acct, cpub, nonce=wn, aad=wa, ct=wc, v=1)
+
+    seen = {}
+
+    async def fake_with_tools(*, base_url, api_key, model, messages, tools, execute_tool, max_steps, timeout):
+        seen["model"] = model
+        seen["prompt"] = messages[0]["content"]
+        seen["tool_names"] = [t["function"]["name"] for t in tools]
+        return "The answer is 391.", [{"tool": "calculator", "args": {"expression": "23*17"}, "result": "391"}]
+
+    monkeypatch.setattr(inference_backend, "complete_with_tools", fake_with_tools)
+
+    async def dummy_complete(prompt, model=None):  # present so use_tools sees inference != None
+        return "unused"
+
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        run_mode="cvm", device_tokens="x", inference_base="http://prov", inference_key="k",
+        tool_model="phala/deepseek-v3.2", receipt_enabled=False,
+    )
+    app.dependency_overrides[get_account_registry] = lambda: reg
+    app.dependency_overrides[get_session_manager] = lambda: mgr
+    app.dependency_overrides[get_inference] = lambda: dummy_complete
+    app.dependency_overrides[get_receipt_fetcher] = lambda: None
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        body = {**_seal_prompt(sk, acct, "what is 23*17"), "tools": True}
+        resp = await c.post("/v1/chat", json=body, headers=_auth(priv, acct, "POST", "/v1/chat"))
+    assert resp.status_code == 200
+    text = resp.text
+    assert seen["model"] == "phala/deepseek-v3.2"      # tool turn forced onto the FC-capable model
+    assert seen["prompt"] == "what is 23*17"           # gateway decrypted the prompt
+    assert "calculator" in seen["tool_names"]
+    assert "391" not in text                            # nothing plaintext on the wire
+    assert "event: tool" in text and "event: token" in text and "event: done" in text
+    # Decrypt the sealed tool step + the final token.
+    lines = [ln for ln in text.splitlines() if ln.startswith("data:") and "envelope" in ln]
+    opened = []
+    for ln in lines:
+        env = json.loads(ln[len("data:"):].strip())["envelope"]
+        opened.append(
+            sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+                base64.b64decode(env["ct"]), base64.b64decode(env["aad"]), base64.b64decode(env["nonce"]), sk
+            ).decode()
+        )
+    assert any("calculator" in o and "391" in o for o in opened)   # the sealed tool step
+    assert "The answer is 391." in opened                          # the sealed final answer
+
+
 async def test_no_session_returns_428(tmp_path):
     priv, pub = _keypair()
     acct = derive_account_id(pub)

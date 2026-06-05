@@ -117,11 +117,14 @@ def _is_internal_host(host: str) -> bool:
     return False
 
 
-def host_allowed(url: str, allowed_hosts: set[str]) -> bool:
+def host_allowed(url: str, allowed_hosts: set[str], *, yolo: bool = False) -> bool:
     """Fail-closed: only http(s) URLs whose host is in `allowed_hosts` (exact or dot-suffix) AND not
-    internal are reachable. Empty allowlist -> nothing is reachable."""
-    if not allowed_hosts:
-        return False
+    internal are reachable. Empty allowlist -> nothing is reachable.
+
+    `yolo=True` (the app's "yolo mode" toggle, opted into per-turn by the user) BYPASSES the host
+    allowlist — any external http(s) host is permitted. The SSRF guard is NEVER bypassed: even in
+    yolo, loopback/private/link-local/reserved/metadata targets stay blocked, so a tool can't be
+    tricked into reaching the CVM's own internals or cloud metadata. Yolo widens reach, not safety."""
     try:
         parsed = urlparse(url)
     except Exception:  # noqa: BLE001
@@ -129,14 +132,19 @@ def host_allowed(url: str, allowed_hosts: set[str]) -> bool:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return False
     host = parsed.hostname.lower()
-    in_list = host in allowed_hosts or any(host == a or host.endswith("." + a) for a in allowed_hosts)
-    if not in_list:
-        return False
+    if not yolo:
+        if not allowed_hosts:
+            return False
+        in_list = host in allowed_hosts or any(host == a or host.endswith("." + a) for a in allowed_hosts)
+        if not in_list:
+            return False
     return not _is_internal_host(host)
 
 
-async def _web_fetch(url: str, allowed_hosts: set[str], *, timeout: float, transport, max_chars: int) -> str:
-    if not host_allowed(url, allowed_hosts):
+async def _web_fetch(
+    url: str, allowed_hosts: set[str], *, yolo: bool, timeout: float, transport, max_chars: int
+) -> str:
+    if not host_allowed(url, allowed_hosts, yolo=yolo):
         raise PermissionError("host not in egress allowlist")
     async with httpx.AsyncClient(timeout=timeout, transport=transport, follow_redirects=False) as client:
         resp = await client.get(url)
@@ -150,11 +158,11 @@ async def _web_fetch(url: str, allowed_hosts: set[str], *, timeout: float, trans
 ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[str]]
 
 
-def tool_specs(allowed_hosts: set[str]) -> list[dict[str, Any]]:
-    """Tool specs to advertise. web_fetch is only offered when at least one host is allowlisted
-    (no point dangling a tool that will always refuse)."""
+def tool_specs(allowed_hosts: set[str], *, yolo: bool = False) -> list[dict[str, Any]]:
+    """Tool specs to advertise. web_fetch is offered when at least one host is allowlisted OR yolo is
+    on (no point dangling a tool that will always refuse)."""
     specs = [CALCULATOR_SPEC]
-    if allowed_hosts:
+    if allowed_hosts or yolo:
         specs.append(WEB_FETCH_SPEC)
     return specs
 
@@ -162,13 +170,14 @@ def tool_specs(allowed_hosts: set[str]) -> list[dict[str, Any]]:
 def build_executor(
     allowed_hosts: set[str] | None = None,
     *,
+    yolo: bool = False,
     timeout: float = 15.0,
     transport=None,
     max_chars: int = 8000,
 ) -> ToolExecutor:
     """Build the in-CVM `execute_tool(name, args)` closure for complete_with_tools. `allowed_hosts`
-    is the egress allowlist (default empty = fail-closed, no external fetch). `transport` is
-    injectable for tests."""
+    is the egress allowlist (default empty = fail-closed, no external fetch); `yolo` bypasses the
+    allowlist for external hosts (SSRF guard still applies). `transport` is injectable for tests."""
     hosts = set(allowed_hosts or set())
 
     async def execute_tool(name: str, args: dict[str, Any]) -> str:
@@ -176,7 +185,7 @@ def build_executor(
             return calculate(args.get("expression", ""))
         if name == "web_fetch":
             return await _web_fetch(
-                str(args.get("url", "")), hosts, timeout=timeout, transport=transport, max_chars=max_chars
+                str(args.get("url", "")), hosts, yolo=yolo, timeout=timeout, transport=transport, max_chars=max_chars
             )
         raise ValueError(f"unknown tool: {name}")
 

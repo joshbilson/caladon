@@ -77,6 +77,24 @@ class Settings(BaseSettings):
         Otherwise OBSERVE (surface honestly, never block)."""
         return self.receipt_enabled and bool(self.allowed_app_ids() or self.allowed_compose_hashes())
 
+    # In-CVM tool loop (MCP / skills / subagents). When a /v1/chat turn asks for tools, the gateway
+    # opens the prompt in-CVM and runs an OpenAI-style tool loop, EXECUTING each tool inside the CVM
+    # (app/mcp_broker.py) — the model never executes anything. Tool turns are routed to a
+    # function-calling-capable attested model (`tool_model`), since not every attested model supports
+    # native tool_calls (verified: deepseek-v3.2 + gpt-oss-120b do; qwen3.6-uncensored does not).
+    mcp_enabled: bool = True
+    tool_model: str = "phala/deepseek-v3.2"
+    tool_max_steps: int = 6
+    # Egress allowlist for in-CVM tools (comma-separated hosts). FAIL-CLOSED: empty -> no external
+    # network from any tool (only no-network tools like the calculator work). A per-request
+    # `tools_yolo` flag (the app's "yolo mode" toggle) lets the user bypass THIS allowlist for a turn
+    # — but the SSRF guard (loopback/private/link-local/metadata) stays on even in yolo, so a tool can
+    # never reach the CVM's own internals. Operators add trusted hosts via GATEWAY_MCP_ALLOWED_HOSTS.
+    mcp_allowed_hosts: str = ""
+
+    def mcp_allowed_hosts_set(self) -> set[str]:
+        return {h.strip().lower() for h in self.mcp_allowed_hosts.split(",") if h.strip()}
+
     @field_validator("letta_password")
     @classmethod
     def _reject_placeholder_password(cls, v: str) -> str:

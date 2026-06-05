@@ -40,6 +40,13 @@ class ChatRequest(BaseModel):
     # falls back to the configured default. Metadata, not secret (the relay can't see it inside
     # the in-CVM TLS; RedPill sees the model name inherently).
     model: str | None = None
+    # In-CVM tool loop (MCP/skills/subagents). When true, the gateway runs the prompt through an
+    # OpenAI tool loop, executing tools INSIDE the CVM (app/mcp_broker) behind the egress allowlist,
+    # and routes the turn to a function-calling-capable attested model (settings.tool_model).
+    tools: bool = False
+    # The app's "yolo mode" toggle: bypass the host egress allowlist for THIS turn (the user opted
+    # in). The SSRF guard still blocks loopback/private/metadata even in yolo.
+    tools_yolo: bool = False
 
 
 def _wire(nonce: bytes, aad: bytes, ct: bytes, v: int = 1) -> dict:
@@ -135,7 +142,10 @@ async def chat(
     # The model the gateway will route the turn to (for the receipt + the completion). The
     # per-request slug is honoured only if attested (deps.get_inference re-checks); the report
     # endpoint is keyed by this same slug, so the receipt reflects the serving enclave.
-    chosen_model = req.model or settings.inference_model
+    # A TOOL turn is forced onto the function-calling-capable attested model (not every attested
+    # model supports native tool_calls), so the receipt reflects THAT enclave.
+    use_tools = bool(req.tools and settings.mcp_enabled and inference is not None)
+    chosen_model = settings.tool_model if use_tools else (req.model or settings.inference_model)
 
     async def gen():
         try:
@@ -157,7 +167,35 @@ async def chat(
                                 {"code": "attestation_rejected", "message": "serving enclave not allowed", "reason": violation},
                             )
                             return
-                yield _seal_event("token", await inference(prompt, req.model))
+                if use_tools:
+                    # In-CVM tool loop: run the prompt with tools, executing each call inside the CVM
+                    # behind the egress allowlist (yolo bypasses the allowlist, never the SSRF guard).
+                    from app import inference_backend, mcp_broker
+
+                    allowed = settings.mcp_allowed_hosts_set()
+                    executor = mcp_broker.build_executor(
+                        allowed, yolo=req.tools_yolo, timeout=settings.receipt_timeout
+                    )
+                    specs = mcp_broker.tool_specs(allowed, yolo=req.tools_yolo)
+                    final_text, step_log = await inference_backend.complete_with_tools(
+                        base_url=settings.inference_base,
+                        api_key=settings.inference_key,
+                        model=chosen_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        tools=specs,
+                        execute_tool=executor,
+                        max_steps=settings.tool_max_steps,
+                        timeout=settings.inference_timeout,
+                    )
+                    # Surface each in-CVM tool step to the client, sealed (purpose "chat"), so the UI
+                    # can show what ran. Args/results are the user's own turn data — sealed like the reply.
+                    import json as _json
+
+                    for step in step_log:
+                        yield _seal_event("tool", _json.dumps(step)[:4000])
+                    yield _seal_event("token", final_text)
+                else:
+                    yield _seal_event("token", await inference(prompt, req.model))
                 yield format_sse("receipt", _receipt_payload(receipt, settings, chosen_model))
             else:
                 # Letta agent path (memory). Streams sealed deltas (token/reasoning).

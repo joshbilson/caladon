@@ -76,6 +76,29 @@ async def test_executor_web_fetch_allowed_path():
     assert out == "hello from allowlisted host"
 
 
+def test_yolo_bypasses_allowlist_but_not_ssrf():
+    # yolo: any external (resolvable, non-internal) host allowed even with an empty allowlist...
+    assert mcp_broker.host_allowed(f"https://{PUBLIC_IP}/x", set(), yolo=True) is True
+    assert mcp_broker.host_allowed("https://8.8.8.8/x", set(), yolo=True) is True
+    # ...but a non-resolvable host still fails closed (SSRF guard can't confirm it's external).
+    assert mcp_broker.host_allowed("https://does-not-resolve.invalid/x", set(), yolo=True) is False
+    # ...but internal/SSRF targets stay blocked even in yolo.
+    assert mcp_broker.host_allowed("http://127.0.0.1/x", set(), yolo=True) is False
+    assert mcp_broker.host_allowed("http://169.254.169.254/meta", set(), yolo=True) is False
+    assert mcp_broker.host_allowed("http://10.0.0.1/x", set(), yolo=True) is False
+
+
+def test_yolo_advertises_web_fetch():
+    assert any(s["function"]["name"] == "web_fetch" for s in mcp_broker.tool_specs(set(), yolo=True))
+
+
+@pytest.mark.asyncio
+async def test_executor_yolo_web_fetch_internal_still_refused():
+    execute = mcp_broker.build_executor(set(), yolo=True)
+    with pytest.raises(PermissionError):
+        await execute("web_fetch", {"url": "http://localhost:8088/secrets"})
+
+
 @pytest.mark.asyncio
 async def test_executor_unknown_tool_raises():
     execute = mcp_broker.build_executor(set())
