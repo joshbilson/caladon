@@ -12,7 +12,7 @@ import CaladonUnlock from '~/components/Auth/CaladonUnlock';
 import { MarketplaceProvider } from '~/components/Agents/MarketplaceContext';
 import AgentMarketplace from '~/components/Agents/Marketplace';
 import { OAuthSuccess, OAuthError } from '~/components/OAuth';
-import { AuthContextProvider } from '~/hooks/AuthContext';
+import { AuthContextProvider, useAuthContext } from '~/hooks/AuthContext';
 import WithRum from '~/lib/rum/WithRum';
 import RouteErrorBoundary from './RouteErrorBoundary';
 import StartupLayout from './Layouts/Startup';
@@ -56,6 +56,24 @@ const StoreHydrationWrapper = () => {
   const { conversationId } = useParams();
   useHydrateConversation(conversationId);
   return <ChatRoute />;
+};
+
+/**
+ * Caladon protected-route gate. Upstream `<Root/>` renders `null` while locked (no in-memory
+ * identity), relying on `ChatRoute`'s `useAuthRedirect` to bounce locked users to `/login`. But on a
+ * FRESH load of a protected URL (`/`, `/c/<id>`, `/search`, …) `Root` returns null BEFORE its child
+ * route — and thus `useAuthRedirect` — ever mounts, so a locked deep-link (or just opening the app at
+ * `/`) renders a BLANK page instead of the unlock screen. This gate fixes that: when locked, redirect
+ * to `/login` (the only way in); when unlocked, render `<Root/>` unchanged so its `<Outlet/>` mounts
+ * the matched child route as before. Identity is in-memory only, so `isAuthenticated` is false on
+ * every cold load until the user unlocks — then `applyUserContext` flips it true and navigates here.
+ */
+const CaladonProtected = () => {
+  const { isAuthenticated } = useAuthContext();
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace={true} />;
+  }
+  return <Root />;
 };
 
 const loadInlinePromptsView = () =>
@@ -137,7 +155,7 @@ export const router = createBrowserRouter(
         dashboardRoutes,
         {
           path: '/',
-          element: <Root />,
+          element: <CaladonProtected />,
           children: [
             {
               index: true,
