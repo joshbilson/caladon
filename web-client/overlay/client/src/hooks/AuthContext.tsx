@@ -20,7 +20,7 @@ import {
   isUnlocked as caladonIsUnlocked,
   signRequest as caladonSignRequest,
 } from '~/lib/caladon';
-import { getStoreProxy, deriveStoreKeyHex } from '~/lib/store';
+import { getStoreProxy, resetStoreProxy, deriveStoreKeyHex } from '~/lib/store';
 import { warmupEmbedder, hydrateRagIndex, resetRagIndex } from '~/lib/rag/retrieval';
 import useConversationList from '~/store/useConversationList';
 import store from '~/store';
@@ -154,12 +154,14 @@ const AuthContextProvider = ({
   const lock = useCallback(() => {
     caladonLock();
     setAccountId(undefined);
-    // Wipe the on-device store (logout / panic) and drop the in-memory RAG index. clearStore keeps
-    // the store open but empties every table; resetRagIndex drops the cosine matrix. Fire-and-forget
-    // so a store error can't wedge the lock/navigation.
-    void getStoreProxy()
-      .clearStore()
-      .catch((err) => console.error('[caladon] device store clear on lock failed:', err));
+    // Tear the on-device store DOWN (logout / panic): terminate the worker, which drops the DB
+    // handle AND the SQLCipher key for this identity, and reset the proxy singleton. This is
+    // REQUIRED (not just clearStore) so the NEXT unlock — which may be a different seed → different
+    // device_store_key → different key — gets a fresh worker that re-INITs with the new key. With
+    // the old clearStore() path the proxy stayed `opened`, so openStore() short-circuited and the
+    // worker kept identity A's connection: identity B would read/write A's encrypted DB. Synchronous
+    // + cannot throw, so it can't wedge the lock/navigation. resetRagIndex drops the cosine matrix.
+    resetStoreProxy();
     resetRagIndex();
     applyUserContext({ isAuthenticated: false, user: undefined, redirect: '/login', token: undefined });
   }, [applyUserContext]);
@@ -173,10 +175,9 @@ const AuthContextProvider = ({
     (redirect?: string) => {
       caladonLock();
       setAccountId(undefined);
-      // Same teardown as lock(): empty the encrypted store and drop the RAG index. Fire-and-forget.
-      void getStoreProxy()
-        .clearStore()
-        .catch((err) => console.error('[caladon] device store clear on logout failed:', err));
+      // Same teardown as lock(): terminate the store worker (drops the DB handle + key, forces the
+      // next unlock to re-INIT with the new identity's key) and drop the RAG index. Synchronous.
+      resetStoreProxy();
       resetRagIndex();
       applyUserContext({
         isAuthenticated: false,

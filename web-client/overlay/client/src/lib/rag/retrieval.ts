@@ -221,6 +221,18 @@ export function getRagIndex(): RagIndex {
  */
 export async function hydrateRagIndex(force = false): Promise<RagIndex> {
   const index = getRagIndex();
+
+  // FAIL-OPEN GUARD (critical): StoreProxy.hydrateVectors() awaits the proxy's internal `ready`,
+  // which only settles after openStore(). If the store has NOT been opened yet — or its open is
+  // still in flight (slow/hung OPFS init) — that await never resolves, so an `await hydrateRagIndex()`
+  // on the send hot path (augmentPromptWithRAG → here) would BLOCK the send forever. Returning the
+  // (empty) index immediately when the store isn't open keeps RAG a pure enhancement: the prompt is
+  // sent un-augmented rather than blocked. A later call (post-open, with `force`) rebuilds the index.
+  if (!getStoreProxy().isOpen) {
+    if (!hydratePromise) index.load([]);
+    return index;
+  }
+
   if (hydratePromise && !force) return hydratePromise;
 
   hydratePromise = (async () => {

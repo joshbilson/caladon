@@ -19,8 +19,13 @@
 
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { QueryKeys } from 'librechat-data-provider';
+import type { InfiniteData } from '@tanstack/react-query';
+import { QueryKeys, Constants } from 'librechat-data-provider';
+import type { TConversation } from 'librechat-data-provider';
+import { addConversationToAllConversationsQueries } from '~/utils';
+import type { ConversationCursorData } from '~/utils';
 import { getStoreProxy } from '~/lib/store';
+import type { StoredConversation } from '~/lib/store';
 
 export interface UseImportConversationOptions {
   onSuccess?: () => void;
@@ -41,6 +46,46 @@ export class UnsupportedImportError extends Error {
     super(message);
     this.name = 'UnsupportedImportError';
   }
+}
+
+/** The canonical default `allConversations` key the sidebar's query registers (no tags/search). */
+const DEFAULT_ALL_CONVERSATIONS_KEY = [
+  QueryKeys.allConversations,
+  {
+    isArchived: undefined,
+    sortBy: undefined,
+    sortDirection: undefined,
+    tags: undefined,
+    search: undefined,
+  },
+] as const;
+
+/** Best-effort JSON parse; returns `undefined` on any malformed payload (never throws). */
+function safeParse<T = unknown>(json: string | null | undefined): T | undefined {
+  if (json == null || json === '') {
+    return undefined;
+  }
+  try {
+    return JSON.parse(json) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reconstruct a `TConversation` from a stored row (prefers the lossless `convoJson`). */
+function toTConversation(row: StoredConversation): TConversation {
+  const parsed = safeParse<TConversation>(row.convoJson);
+  if (parsed && typeof parsed === 'object') {
+    return { ...parsed, conversationId: parsed.conversationId ?? row.conversationId } as TConversation;
+  }
+  return {
+    conversationId: row.conversationId,
+    title: row.title ?? 'New Chat',
+    endpoint: row.endpoint,
+    model: row.model,
+    createdAt: new Date(row.createdAt).toISOString(),
+    updatedAt: new Date(row.updatedAt).toISOString(),
+  } as unknown as TConversation;
 }
 
 /** Read a File fully in-browser as text. Rejects on read error. NEVER uploads. */
@@ -120,14 +165,37 @@ export function useImportConversation(options: UseImportConversationOptions = {}
         }
 
         // 4) Hand the parsed JSON to the on-device store; the worker maps + persists it.
-        await getStoreProxy().importChatExport(json);
+        const store = getStoreProxy();
+        await store.importChatExport(json);
 
-        // 5) Refresh the sidebar: the imported conversations come from the store, so invalidate the
-        //    list queries to re-pull them (active + archived buckets).
-        await Promise.all([
-          queryClient.invalidateQueries([QueryKeys.allConversations]),
-          queryClient.invalidateQueries([QueryKeys.archivedConversations]),
-        ]);
+        // 5) Refresh the sidebar DIRECTLY from the store. We must NOT invalidate the
+        //    `allConversations` query here: in Caladon that query is backed by the shim's
+        //    /api/convos stub, which returns an EMPTY list — invalidating would refetch that empty
+        //    response and CLOBBER the cache, and useConversationList (deps: [isAuthenticated,
+        //    queryClient]) does not re-run on import, so the imported chats would never appear. The
+        //    authoritative source is the on-device store, so we re-read it and seed the sidebar
+        //    cache the same way useConversationList does (fan-out + de-dupe by conversationId).
+        const { conversations } = await store.listConversations(200);
+        if (conversations.length > 0) {
+          queryClient.setQueryData<InfiniteData<ConversationCursorData>>(
+            DEFAULT_ALL_CONVERSATIONS_KEY,
+            (old) =>
+              old ?? {
+                pageParams: [undefined],
+                pages: [{ conversations: [], nextCursor: null }],
+              },
+          );
+          const tConvos = conversations.map(toTConversation);
+          // listConversations returns newest-first; insert in reverse so the fan-out (which prepends)
+          // preserves newest-first ordering.
+          for (let i = tConvos.length - 1; i >= 0; i--) {
+            const convo = tConvos[i];
+            if (convo.conversationId == null || convo.conversationId === Constants.NEW_CONVO) {
+              continue;
+            }
+            addConversationToAllConversationsQueries(queryClient, convo);
+          }
+        }
 
         onSuccess?.();
         return true;

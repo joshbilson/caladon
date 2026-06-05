@@ -50,6 +50,10 @@ export class StoreProxy {
       this.resolveReady = res;
       this.rejectReady = rej;
     });
+    // Attach a no-op rejection handler so an openStore() failure (which rejects `ready`) never
+    // surfaces as an "Uncaught (in promise)" before a call site awaits it — every op already
+    // re-rejects from its own `await this.ready`, where the caller handles it.
+    this.ready.catch(() => undefined);
   }
 
   /** Spawn the worker (idempotent) and wire the message pump. */
@@ -222,6 +226,38 @@ export class StoreProxy {
   get isOpen(): boolean {
     return this.opened;
   }
+
+  /**
+   * Tear the proxy down: kill the worker (which holds the DB handle + the store key for the CURRENT
+   * identity), reject every in-flight op, and reset `opened`/`ready`. Used on lock/logout so the
+   * NEXT unlock — which may be a DIFFERENT seed → different `device_store_key` → different SQLCipher
+   * key — gets a fresh worker that re-runs INIT with the new key. Without this, `openStore`'s
+   * `if (this.opened) return` short-circuit (and the worker's own `if (db) return` in init) keep the
+   * connection keyed to the FIRST identity, so identity B would read/write identity A's encrypted DB.
+   */
+  terminate(): void {
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    const err = new Error('store proxy terminated');
+    for (const [, p] of this.pending) p.reject(err);
+    this.pending.clear();
+    this.opened = false;
+    // Reject the OLD ready so anything still awaiting it fails fast (fail-open at the call sites)
+    // rather than hanging forever, then install a fresh pending ready for the next openStore.
+    try {
+      this.rejectReady(err);
+    } catch {
+      /* ready may already be settled */
+    }
+    this.ready = new Promise<void>((res, rej) => {
+      this.resolveReady = res;
+      this.rejectReady = rej;
+    });
+    // The freshly-created rejected/pending promises must not surface as unhandled rejections.
+    this.ready.catch(() => undefined);
+  }
 }
 
 let singleton: StoreProxy | null = null;
@@ -230,4 +266,16 @@ let singleton: StoreProxy | null = null;
 export function getStoreProxy(): StoreProxy {
   if (!singleton) singleton = new StoreProxy();
   return singleton;
+}
+
+/**
+ * Tear down the shared proxy (lock / logout / identity switch). Kills the worker so the next
+ * `getStoreProxy().openStore(...)` re-INITs with the new identity's key. MUST be called on lock so a
+ * re-unlock with a different seed cannot read or write the previous identity's encrypted store.
+ */
+export function resetStoreProxy(): void {
+  if (singleton) {
+    singleton.terminate();
+    singleton = null;
+  }
 }

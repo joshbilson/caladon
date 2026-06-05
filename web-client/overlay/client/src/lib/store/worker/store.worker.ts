@@ -8,8 +8,12 @@
  *
  * Persistence: OPFS via @evolu/sqlite-wasm (= @sqlite.org/sqlite-wasm + SQLite3MultipleCiphers).
  * Requires cross-origin isolation (COOP same-origin + COEP require-corp) for the OPFS SAH pool;
- * if unavailable we fall back to an in-memory database (history is then session-only). Either way
- * `PRAGMA key = "<hex>"` is applied first so the on-disk file is SQLCipher-encrypted.
+ * if unavailable we fall back to an in-memory database (history is then session-only).
+ *
+ * Encryption: the OPFS connection is opened through the cipher-wrapped VFS name
+ * "multipleciphers-opfs-sahpool" (NOT the OpfsSAHPoolDb subclass, which hardcodes the bare
+ * 'opfs-sahpool' name and cannot be encrypted). `PRAGMA key = "x'<hex>'"` is then applied first so
+ * every page is encrypted at rest with the raw 32-byte device key (aes256cbc, SQLCipher-style).
  *
  * Requests are processed sequentially (a single message handler, awaited) so multi-statement ops
  * are not interleaved; write ops that touch several rows run inside a transaction.
@@ -59,19 +63,38 @@ interface Sqlite3Db {
   close(): void;
 }
 
+/** Options form of the OO1 DB ctor — lets us pass an explicit (cipher-wrapped) VFS name. */
+interface Sqlite3DbCtorOpts {
+  filename: string;
+  flags?: string;
+  vfs?: string;
+}
+
 interface Sqlite3OO1 {
-  /** Plain in-memory / VFS-backed database (used for the in-memory fallback). */
-  DB: new (filename: string, flags?: string) => Sqlite3Db;
-  /** OPFS SyncAccessHandle pool VFS — durable, no SharedArrayBuffer required. */
-  OpfsSAHPoolDb?: new (filename: string) => Sqlite3Db;
+  /**
+   * Plain DB ctor. dbCtorHelper passes `opt.vfs` straight to sqlite3_open_v2, so an explicit VFS
+   * name (e.g. the cipher-wrapped 'multipleciphers-opfs-sahpool') opens through SQLite3 Multiple
+   * Ciphers — unlike the OpfsSAHPoolDb subclass, which hardcodes the BARE 'opfs-sahpool' name and
+   * therefore cannot be encrypted ("Encryption is not supported by the VFS").
+   */
+  DB: new (filenameOrOpts: string | Sqlite3DbCtorOpts, flags?: string) => Sqlite3Db;
+}
+
+/** The pool utility installOpfsSAHPoolVfs returns; we use it to unlink a specific DB file on the
+ *  NOTADB self-heal path (a corrupt / incompatible-older-version file) without nuking other files. */
+interface OpfsSAHPool {
+  unlink?: (name: string) => boolean | void;
+  wipeFiles?: () => void | Promise<void>;
+  getFileNames?: () => string[];
 }
 
 interface Sqlite3ApiObject {
   oo1: Sqlite3OO1;
-  /** Lazily-installed OPFS SAH pool VFS utility (present only when OPFS is available). */
-  installOpfsSAHPoolVfs?: (opts?: {
-    name?: string;
-  }) => Promise<{ OpfsSAHPoolDb: new (filename: string) => Sqlite3Db }>;
+  /**
+   * Installs the OPFS SAH-pool VFS and registers it under `name` (default 'opfs-sahpool').
+   * We open through the cipher wrapper rather than via the returned OpfsSAHPoolDb subclass.
+   */
+  installOpfsSAHPoolVfs?: (opts?: { name?: string }) => Promise<OpfsSAHPool>;
   capi: Record<string, unknown>;
 }
 
@@ -84,7 +107,18 @@ type Sqlite3InitModule = (config?: {
  * Worker state
  * ------------------------------------------------------------------ */
 
-const DB_FILE = 'caladon-store-v1.db';
+// Per-identity DB file: each identity's device_store_key gets its OWN encrypted file, so different
+// identities on one device never collide (opening identity A's encrypted DB with identity B's key
+// throws SQLITE_NOTADB). The tag is a NON-secret SHA-256 prefix of the key, never the key itself.
+const DB_FILE_BASE = 'caladon-store-v1';
+async function dbFileFor(hexKey: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(hexKey));
+  const tag = [...new Uint8Array(digest)]
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `${DB_FILE_BASE}-${tag}.db`;
+}
 const FLOAT_BYTES = 4;
 
 let db: Sqlite3Db | null = null;
@@ -217,50 +251,109 @@ async function init(hexKey: string): Promise<void> {
     printErr: (m: string) => console.error('[store.worker][sqlite]', m),
   });
 
-  // Prefer durable OPFS (SAH pool VFS — no SharedArrayBuffer requirement, only crossOriginIsolated
-  // for OPFS itself). Fall back to in-memory when OPFS is unavailable (e.g. not isolated).
-  db = await openDb(sqlite3);
+  // Prefer durable OPFS (SAH-pool VFS, opened THROUGH the SQLite3 Multiple Ciphers wrapper so the
+  // page cipher is applied — see openDb). Fall back to in-memory when OPFS is unavailable.
+  // Per-identity encrypted file (so different identities/keys never collide on one device, and the
+  // pre-encryption v3/v4 leftover 'caladon-store-v1.db' is simply never reopened).
+  const dbFile = await dbFileFor(hexKey);
+  db = await openDb(sqlite3, dbFile);
 
   // SQLCipher key MUST be the first statement executed against the connection.
   // The hex form lets SQLite3MultipleCiphers use the raw 32 bytes verbatim (no KDF re-stretch).
   run(`PRAGMA key = "x'${hexKey}'"`);
 
-  // Recommended pragmas for a single-connection encrypted store.
+  // PRAGMA key returns OK even with a WRONG key (the key is not applied until the first page read),
+  // so force a read to fail loud. Brand-new file → 0 rows; an EXISTING per-identity file this key
+  // can't decrypt (corrupt, or an incompatible older build) → SQLITE_NOTADB. Since the file is
+  // per-identity it holds no data this identity could read, so wipe + recreate rather than disabling
+  // history forever. (Only on the encrypted/persistent path; harmless on :memory:.)
+  if (persistent) {
+    try {
+      mustDb().selectValue('SELECT count(*) FROM sqlite_schema');
+    } catch (readErr) {
+      console.warn('[store.worker] device DB unreadable for this identity; recreating:', readErr);
+      try {
+        mustDb().close();
+      } catch {
+        /* ignore */
+      }
+      db = null;
+      try {
+        if (poolUtil?.unlink) poolUtil.unlink(`/${dbFile}`);
+        else if (poolUtil?.wipeFiles) await poolUtil.wipeFiles();
+      } catch {
+        /* ignore — the reopen below surfaces any persistent failure */
+      }
+      db = await openDb(sqlite3, dbFile);
+      run(`PRAGMA key = "x'${hexKey}'"`);
+      mustDb().selectValue('SELECT count(*) FROM sqlite_schema');
+    }
+  }
+
+  // Recommended pragmas for a single-connection encrypted store. NOTE: the OPFS post-open callback
+  // that auto-sets busy_timeout is keyed by the BARE vfs pointer and is SKIPPED when opening through
+  // the cipher wrapper, so set it ourselves.
+  mustDb().exec('PRAGMA busy_timeout = 10000');
   mustDb().exec('PRAGMA foreign_keys = ON');
-  mustDb().exec('PRAGMA journal_mode = WAL');
+  // SAH-pool is single-connection; MEMORY journal avoids a second OPFS file and is plenty for a
+  // chat-history store (WAL gives little here and adds a -wal/-shm sidecar).
+  mustDb().exec(persistent ? 'PRAGMA journal_mode = MEMORY' : 'PRAGMA journal_mode = WAL');
   mustDb().exec('PRAGMA synchronous = NORMAL');
 
   // Apply the schema (idempotent).
   mustDb().exec(SCHEMA_SQL);
 
-  // Verify FTS5 is available — a missing FTS5 means the search path is silently broken, so fail loud.
-  const ftsVer = mustDb().selectValue('SELECT fts5_version()');
-  if (ftsVer == null) {
-    throw new Error('FTS5 not available in this SQLite build');
+  // FTS5 availability is PROVEN by SCHEMA_SQL above succeeding (it does CREATE VIRTUAL TABLE
+  // messages_fts USING fts5(...), which throws if the FTS5 module is absent). Confirm the table
+  // materialized — do NOT call the fts5_version() SQL HELPER: this @evolu/@sqlite.org wasm build
+  // ships the FTS5 MODULE but not the fts5_version() function, so selecting it throws
+  // "no such function: fts5_version" and would fail the store open even though FTS5 works.
+  const ftsOk = mustDb().selectValue(
+    "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='messages_fts'",
+  );
+  if (!ftsOk) {
+    throw new Error('FTS5 messages_fts table not created (FTS5 unavailable in this SQLite build)');
   }
 }
 
-async function openDb(sqlite3: Sqlite3ApiObject): Promise<Sqlite3Db> {
+// The SAH-pool VFS name we register; the cipher wrapper auto-creates "multipleciphers-<this>".
+const SAHPOOL_VFS = 'opfs-sahpool';
+const CIPHER_VFS = `multipleciphers-${SAHPOOL_VFS}`;
+
+// Cached SAH-pool handle (the VFS may only be installed ONCE per worker; reused by the NOTADB
+// self-heal path to unlink a specific corrupt file).
+let poolUtil: OpfsSAHPool | null = null;
+
+async function openDb(sqlite3: Sqlite3ApiObject, dbFile: string): Promise<Sqlite3Db> {
   const isolated =
     typeof self !== 'undefined' && (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated;
   if (isolated && typeof sqlite3.installOpfsSAHPoolVfs === 'function') {
     try {
-      const pool = await sqlite3.installOpfsSAHPoolVfs({ name: 'caladon-store' });
+      // 1. Register the real OPFS SAH-pool VFS under 'opfs-sahpool' — ONCE per worker (installing it
+      //    twice under the same name throws). No SAB needed; only OPFS + cross-origin isolation,
+      //    both satisfied by the shim's COOP/COEP.
+      if (!poolUtil) poolUtil = await sqlite3.installOpfsSAHPoolVfs({ name: SAHPOOL_VFS });
+      // 2. Open through the cipher-wrapped VFS name. SQLite3 Multiple Ciphers' sqlite3mcCheckVfs
+      //    sees the "multipleciphers-" prefix, strips it, finds the real 'opfs-sahpool' VFS, and
+      //    auto-creates+registers "multipleciphers-opfs-sahpool" layered over it (mcIoRead/mcIoWrite
+      //    encrypt/decrypt each page around the real xRead/xWrite). We MUST use the plain oo1.DB
+      //    ctor here — the OpfsSAHPoolDb subclass hardcodes the BARE 'opfs-sahpool' name and would
+      //    bypass the wrapper, reproducing "Encryption is not supported by the VFS".
+      const handle = new sqlite3.oo1.DB({
+        filename: `file:/${dbFile}?vfs=${CIPHER_VFS}`,
+        flags: 'c',
+        vfs: CIPHER_VFS,
+      });
       persistent = true;
-      return new pool.OpfsSAHPoolDb(`/${DB_FILE}`);
+      return handle;
     } catch (e) {
-      console.warn('[store.worker] OPFS SAH pool unavailable, falling back to in-memory:', e);
-    }
-  } else if (isolated && sqlite3.oo1.OpfsSAHPoolDb) {
-    try {
-      persistent = true;
-      return new sqlite3.oo1.OpfsSAHPoolDb(`/${DB_FILE}`);
-    } catch (e) {
-      console.warn('[store.worker] OpfsSAHPoolDb ctor failed, falling back to in-memory:', e);
+      console.warn('[store.worker] OPFS SAH pool / cipher VFS unavailable, falling back to in-memory:', e);
     }
   }
   persistent = false;
-  // ':memory:' connection — session-only, still keyed (no-op on memory but keeps the code path uniform).
+  // ':memory:' connection — session-only. NOTE: :memory: DBs are NOT file-backed, so the page cipher
+  // cannot apply; PRAGMA key is effectively a no-op here. This fallback is unencrypted by nature and
+  // is only reached when OPFS/isolation is missing (history is then session-only anyway).
   return new sqlite3.oo1.DB(':memory:', 'ct');
 }
 

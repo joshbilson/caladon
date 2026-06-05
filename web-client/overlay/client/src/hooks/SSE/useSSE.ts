@@ -306,21 +306,30 @@ export default function useSSE(
       };
 
       let accumulatedText = '';
-      const onSealedDelta = async (e: MessageEvent) => {
-        try {
-          const { envelope } = JSON.parse(e.data) as { envelope: import('@caladon/protocol').Envelope };
-          // Sealed deltas are INCREMENTAL; accumulate the cumulative plaintext and re-render the
-          // full assistant message on each token (mirrors upstream token streaming, which replaces).
-          accumulatedText += await openDelta(envelope);
-          setIsSubmitting(true);
-          setMessages([
-            ...submission.messages,
-            stampedUserMessage,
-            buildResponseMessage(accumulatedText),
-          ]);
-        } catch (error) {
-          console.error('Error opening sealed delta:', error);
-        }
+      // Serialize delta processing into a chain so (a) accumulation order is preserved under the
+      // async openDelta, and (b) the 'done' handler can AWAIT all in-flight deltas before it
+      // finalizes/persists. ROOT CAUSE of "assistant replies blank after reload": 'done' fires when
+      // the SSE stream ends, but the trailing deltas are still inside `await openDelta` — reading
+      // accumulatedText synchronously in 'done' snapshots an EMPTY/partial reply into the cache + the
+      // on-device store. The LIVE view self-heals (the deltas re-render after), masking the bug.
+      let deltaChain: Promise<void> = Promise.resolve();
+      const onSealedDelta = (e: MessageEvent) => {
+        deltaChain = deltaChain.then(async () => {
+          try {
+            const { envelope } = JSON.parse(e.data) as { envelope: import('@caladon/protocol').Envelope };
+            // Sealed deltas are INCREMENTAL; accumulate the cumulative plaintext and re-render the
+            // full assistant message on each token (mirrors upstream token streaming, which replaces).
+            accumulatedText += await openDelta(envelope);
+            setIsSubmitting(true);
+            setMessages([
+              ...submission.messages,
+              stampedUserMessage,
+              buildResponseMessage(accumulatedText),
+            ]);
+          } catch (error) {
+            console.error('Error opening sealed delta:', error);
+          }
+        });
       };
       sse.addEventListener('token', onSealedDelta);
       sse.addEventListener('reasoning', onSealedDelta);
@@ -331,8 +340,12 @@ export default function useSSE(
         // mark the session untrusted and stop. The handshake already gated the channel fail-closed.
       });
 
-      sse.addEventListener('done', () => {
+      sse.addEventListener('done', async () => {
         clearAllDrafts(submission.conversation?.conversationId);
+        // Wait for all in-flight sealed deltas to finish decrypting + accumulating BEFORE snapshotting
+        // accumulatedText into the cache (finalHandler) and the on-device store (persistTurnToStore).
+        // Without this, a fast stream finalizes/persists an empty/partial reply (see deltaChain above).
+        await deltaChain;
         try {
           // FINALIZE client-side: synthesize the `final` data shape upstream's finalHandler
           // expects, so the turn persists in the messages cache (both `new` and the concrete

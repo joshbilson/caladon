@@ -65,13 +65,23 @@ function toTMessage(row: StoredMessage): TMessage {
 
   // Case B: the lossless payload is just the content (array of parts) — or absent.
   const content = parsed as TMessage['content'] | undefined;
+  // Render a HYDRATED (static, non-streaming) message via the plain `text` path — the same path that
+  // renders restored USER messages correctly. We deliberately do NOT re-attach a text-only `content`
+  // array: a non-empty `content` forces LibreChat's content-parts renderer, and our streaming-shaped
+  // text part ({ type:'text', text:{ value } }) renders EMPTY in the static/historical view (the live
+  // streaming path renders it fine, but the historical path does not), which is why reloaded assistant
+  // replies showed blank. `text` is lossless for text-only Batch-1. Only re-attach `content` when it
+  // carries a NON-text part (e.g. a future image/tool part) that the text field can't represent.
+  const hasRichContent =
+    Array.isArray(content) &&
+    content.some((p) => (p as { type?: string } | null)?.type != null && (p as { type?: string }).type !== 'text');
   return {
     messageId: row.messageId,
     conversationId: row.conversationId,
     parentMessageId: row.parentMessageId ?? Constants.NO_PARENT,
     isCreatedByUser: row.isCreatedByUser,
     text: row.text,
-    ...(content != null ? { content } : {}),
+    ...(hasRichContent ? { content } : {}),
     ...(row.model != null ? { model: row.model } : {}),
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),

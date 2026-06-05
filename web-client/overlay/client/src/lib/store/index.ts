@@ -11,7 +11,7 @@
  * worker after INIT; RAG context is injected before sealing; nothing here ever talks to the network.
  */
 
-export { StoreProxy, getStoreProxy } from './client';
+export { StoreProxy, getStoreProxy, resetStoreProxy } from './client';
 export { deriveStoreKeyHex, deriveStoreKeyHexFrom } from './kdf';
 export type { StoreKeyWasm, DeviceStoreWasm } from './kdf';
 export { SCHEMA_SQL, SCHEMA_VERSION } from './schema.sql';
