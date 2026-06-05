@@ -90,6 +90,87 @@ async def fetch_receipt(
     return parse_report(model, report)
 
 
+class ToolLoopError(RuntimeError):
+    """Raised when the in-CVM tool loop cannot produce a final answer (step cap, malformed reply)."""
+
+
+async def complete_with_tools(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    execute_tool,
+    max_steps: int = 6,
+    timeout: float = 120.0,
+    transport=None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """In-CVM tool loop (foundation for MCP / skills / subagents — see in-CVM plan).
+
+    Drives an OpenAI-compatible chat completion that may call `tools`. Each tool call is executed
+    INSIDE the CVM by `execute_tool(name, args) -> str` (an awaitable). `execute_tool` is the trust
+    boundary: it is where the egress allowlist lives (it must refuse any host not explicitly
+    allowed; default fail-closed). We never hand tool execution to the model/provider — only the
+    tool *names+args* round-trip to the model; the work happens here in attested RAM.
+
+    Returns `(final_text, step_log)` where step_log records each tool call/result for sealed
+    `tool_call`/`tool_result` SSE events (the client renders the steps). Raises ToolLoopError on a
+    malformed/empty final reply or if `max_steps` is exceeded (caller fails the turn closed — never
+    echoes the prompt). Use ONLY models that return native structured `tool_calls`
+    (phala/deepseek-v3.2, phala/gpt-oss-120b — verified 2026-06-06); qwen3.6-uncensored emits
+    text-format tool calls and must not be routed here.
+
+    `transport` is injectable for tests (httpx.MockTransport).
+    """
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    convo = list(messages)
+    step_log: list[dict[str, Any]] = []
+
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+        for _step in range(max_steps):
+            payload = {"model": model, "messages": convo, "tools": tools, "tool_choice": "auto", "stream": False}
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            try:
+                message = data["choices"][0]["message"]
+            except (KeyError, IndexError, TypeError) as exc:
+                raise ToolLoopError("inference response missing choices[0].message") from exc
+
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                content = message.get("content")
+                if not content or not content.strip():
+                    raise ToolLoopError("inference returned empty content")
+                return content, step_log
+
+            # Append the assistant turn (with its tool_calls) verbatim, then execute each call
+            # in-CVM and append a `tool` result message keyed by tool_call_id.
+            convo.append(message)
+            for call in tool_calls:
+                fn = call.get("function", {}) or {}
+                name = fn.get("name", "")
+                raw_args = fn.get("arguments", "{}")
+                try:
+                    import json as _json
+
+                    args = _json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except Exception:  # noqa: BLE001 - malformed args from the model; record + tell it
+                    args = {}
+                try:
+                    result = await execute_tool(name, args)
+                except Exception as exc:  # noqa: BLE001 - tool/egress refusal is fed back, not fatal
+                    result = f"tool error: {type(exc).__name__}: {exc}"
+                step_log.append({"tool": name, "args": args, "result": result})
+                convo.append(
+                    {"role": "tool", "tool_call_id": call.get("id", ""), "name": name, "content": str(result)}
+                )
+
+    raise ToolLoopError(f"tool loop exceeded {max_steps} steps")
+
+
 async def complete(*, base_url: str, api_key: str, model: str, prompt: str, timeout: float = 120.0) -> str:
     """One OpenAI-compatible chat completion. Returns the assistant message text. Raises on a
     transport/HTTP error OR an empty/missing completion (the caller fails the turn closed —
