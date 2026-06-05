@@ -172,6 +172,40 @@ export interface ClearAllRequest {
   requestId: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * Memory (persistent cross-conversation facts; device-only, trust-no-one)
+ * ------------------------------------------------------------------ */
+
+/** One persisted memory row (the encrypted-at-rest key/value the assistant recalls). */
+export interface StoredMemory {
+  key: string;
+  value: string;
+  tokenCount: number;
+  updatedAt: number;
+}
+
+/** Create or update a memory (INSERT OR REPLACE by key). `previousKey` renames an existing row. */
+export interface UpsertMemoryRequest {
+  type: 'UPSERT_MEMORY';
+  requestId: string;
+  key: string;
+  value: string;
+  previousKey?: string;
+}
+
+/** Delete a memory by key. */
+export interface DeleteMemoryRequest {
+  type: 'DELETE_MEMORY';
+  requestId: string;
+  key: string;
+}
+
+/** List all memories (most-recently-updated first). */
+export interface ListMemoriesRequest {
+  type: 'LIST_MEMORIES';
+  requestId: string;
+}
+
 /** The full request union. */
 export type StoreRequest =
   | InitRequest
@@ -184,6 +218,9 @@ export type StoreRequest =
   | SearchRequest
   | StoreVectorsRequest
   | HydrateVectorsRequest
+  | UpsertMemoryRequest
+  | DeleteMemoryRequest
+  | ListMemoriesRequest
   | ClearAllRequest;
 
 /** Discriminant union of request `type`s. */
@@ -241,6 +278,13 @@ export interface VectorsResponse {
   vectors: StoredVector[];
 }
 
+/** All persisted memories (most-recently-updated first). */
+export interface MemoriesResponse {
+  type: 'MEMORIES';
+  requestId: string;
+  memories: StoredMemory[];
+}
+
 /** The full response union. */
 export type StoreResponse =
   | OkResponse
@@ -248,7 +292,8 @@ export type StoreResponse =
   | HydrateResponse
   | ListConvosResponse
   | SearchResponse
-  | VectorsResponse;
+  | VectorsResponse
+  | MemoriesResponse;
 
 /** Discriminant union of response `type`s. */
 export type StoreResponseType = StoreResponse['type'];

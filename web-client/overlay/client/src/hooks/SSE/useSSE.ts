@@ -30,6 +30,7 @@ import {
   CaladonError,
 } from '~/lib/caladon';
 import { augmentPromptWithRAG } from '~/lib/rag/retrieval';
+import { injectMemoriesIntoPrompt } from '~/lib/memory/inject';
 import { getStoreProxy } from '~/lib/store';
 import type { StoredConversation, StoredMessage } from '~/lib/store';
 import store from '~/store';
@@ -205,7 +206,11 @@ export default function useSSE(
       // retrieved document/history text is injected inside the trust boundary and sealed with the
       // rest of the prompt. augmentPromptWithRAG fails OPEN to the original prompt (and never to a
       // remote service), so this can only ever add local context, never block the send.
-      const promptText = await augmentPromptWithRAG(rawPromptText);
+      const ragPromptText = await augmentPromptWithRAG(rawPromptText);
+
+      // MEMORY (trust-critical): prepend the user's persistent on-device memories the same way —
+      // inside the trust boundary, sealed with the prompt. Fails OPEN to the un-augmented prompt.
+      const promptText = await injectMemoriesIntoPrompt(ragPromptText);
 
       let wireBody: unknown;
       let authHeader: string;

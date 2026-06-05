@@ -219,7 +219,10 @@ app.get('/api/roles/:role', (c) =>
     permissions: {
       PROMPTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
       BOOKMARKS: { USE: false },
-      MEMORIES: { USE: false, CREATE: false, UPDATE: false, READ: false, OPT_OUT: false },
+      // Memory is DEVICE-ONLY in Caladon (the overlay data-provider/Memories hooks read/write the
+      // encrypted device store, never the network). Granting these unlocks the MemoryPanel UI; no
+      // server backing is implied (the /api/memories stubs below are just 404-avoidance safety nets).
+      MEMORIES: { USE: true, CREATE: true, UPDATE: true, READ: true, OPT_OUT: true },
       AGENTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
       MULTI_CONVO: { USE: false },
       // Enabled: temporary (non-persisted) chats are a device-side concept — a temporary

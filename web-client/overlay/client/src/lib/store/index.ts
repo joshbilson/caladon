@@ -26,6 +26,7 @@ export type {
   StoredConversation,
   StoredMessage,
   StoredVector,
+  StoredMemory,
   VectorChunk,
   SearchHit,
   // Request shapes

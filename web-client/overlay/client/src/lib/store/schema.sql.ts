@@ -17,7 +17,7 @@
  * This DDL is idempotent (`IF NOT EXISTS`) so re-opening an existing store is a no-op.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SCHEMA_SQL = /* sql */ `
 PRAGMA foreign_keys = ON;
@@ -110,6 +110,17 @@ CREATE TABLE IF NOT EXISTS message_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_message_embeddings_messageId
   ON message_embeddings(messageId);
+
+-- Persistent cross-conversation MEMORY (trust-no-one: on-device only, NEVER server-side). Each row
+-- is a user-managed key/value fact the assistant recalls; at chat time relevant memories are injected
+-- into the prompt BEFORE it is sealed (see lib/memory/inject.ts + useSSE), exactly like RAG context.
+-- The whole row is plaintext at rest only inside the SQLCipher-encrypted store.
+CREATE TABLE IF NOT EXISTS memories (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  tokenCount INTEGER NOT NULL DEFAULT 0,
+  updatedAt  INTEGER NOT NULL
+);
 
 PRAGMA user_version = ${SCHEMA_VERSION};
 `;

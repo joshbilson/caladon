@@ -20,6 +20,7 @@ import type {
   StoredConversation,
   StoredMessage,
   StoredVector,
+  StoredMemory,
   SearchHit,
   VectorChunk,
 } from './types';
@@ -214,6 +215,28 @@ export class StoreProxy {
       requestId: nextRequestId(),
     });
     return res.vectors;
+  }
+
+  /** Create or update a memory (rename via `previousKey`). Device-only; injected into the prompt. */
+  async upsertMemory(key: string, value: string, previousKey?: string): Promise<void> {
+    await this.ready;
+    await this.send({ type: 'UPSERT_MEMORY', requestId: nextRequestId(), key, value, previousKey });
+  }
+
+  /** Delete a memory by key. */
+  async deleteMemory(key: string): Promise<void> {
+    await this.ready;
+    await this.send({ type: 'DELETE_MEMORY', requestId: nextRequestId(), key });
+  }
+
+  /** List all memories (most-recently-updated first). */
+  async listMemories(): Promise<StoredMemory[]> {
+    await this.ready;
+    const res = await this.send<Extract<StoreResponse, { type: 'MEMORIES' }>>({
+      type: 'LIST_MEMORIES',
+      requestId: nextRequestId(),
+    });
+    return res.memories;
   }
 
   /** Wipe every table (logout / panic). The store stays open; data is gone. */

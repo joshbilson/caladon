@@ -28,6 +28,7 @@ import type {
   StoredConversation,
   StoredMessage,
   StoredVector,
+  StoredMemory,
   SearchHit,
 } from '../types';
 
@@ -681,6 +682,44 @@ function hydrateVectors(): StoredVector[] {
 }
 
 /* ------------------------------------------------------------------ *
+ * Memory (persistent cross-conversation facts; device-only)
+ * ------------------------------------------------------------------ */
+
+/** Cheap token estimate (~4 chars/token) — enough for the memory-usage meter; no tokenizer needed. */
+function estimateTokens(s: string): number {
+  return Math.max(1, Math.ceil(s.length / 4));
+}
+
+function upsertMemory(key: string, value: string, previousKey?: string): void {
+  tx(() => {
+    // A rename (previousKey != key) drops the old row first so the meter/list don't double-count.
+    if (previousKey && previousKey !== key) {
+      run('DELETE FROM memories WHERE key = ?', [previousKey]);
+    }
+    run(
+      `INSERT INTO memories (key, value, tokenCount, updatedAt)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value, tokenCount=excluded.tokenCount, updatedAt=excluded.updatedAt`,
+      [key, value, estimateTokens(value), Date.now()],
+    );
+  });
+}
+
+function deleteMemory(key: string): void {
+  run('DELETE FROM memories WHERE key = ?', [key]);
+}
+
+function listMemories(): StoredMemory[] {
+  const rows = query('SELECT key, value, tokenCount, updatedAt FROM memories ORDER BY updatedAt DESC');
+  return rows.map((r) => ({
+    key: String(r.key),
+    value: String(r.value),
+    tokenCount: Number(r.tokenCount),
+    updatedAt: Number(r.updatedAt),
+  }));
+}
+
+/* ------------------------------------------------------------------ *
  * Clear all
  * ------------------------------------------------------------------ */
 
@@ -693,6 +732,7 @@ function clearAll(): void {
     mustDb().exec('DELETE FROM files');
     mustDb().exec('DELETE FROM messages');
     mustDb().exec('DELETE FROM conversations');
+    mustDb().exec('DELETE FROM memories');
   });
   mustDb().exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
 }
@@ -754,6 +794,17 @@ async function handle(req: StoreRequest): Promise<StoreResponse> {
 
     case 'HYDRATE_VECTORS':
       return { type: 'VECTORS', requestId: req.requestId, vectors: hydrateVectors() };
+
+    case 'UPSERT_MEMORY':
+      upsertMemory(req.key, req.value, req.previousKey);
+      return { type: 'OK', requestId: req.requestId };
+
+    case 'DELETE_MEMORY':
+      deleteMemory(req.key);
+      return { type: 'OK', requestId: req.requestId };
+
+    case 'LIST_MEMORIES':
+      return { type: 'MEMORIES', requestId: req.requestId, memories: listMemories() };
 
     case 'CLEAR_ALL':
       clearAll();
