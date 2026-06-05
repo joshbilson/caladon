@@ -186,8 +186,11 @@ app.get('/api/config', (c) =>
     //                         omitted modelSelect reads as falsy → useEndpoints.filteredEndpoints
     //                         returns [] → the model dropdown renders EMPTY. Must be true so the
     //                         endpoints/models map into the picker.
-    //   - parameters        — show the per-conversation parameters panel (model settings).
-    interface: { temporaryChat: true, autoSubmitFromUrl: true, modelSelect: true, parameters: true },
+    // NOTE: do NOT enable `parameters` — the per-endpoint parameters/settings panel calls
+    // data-provider parsers.ts which throws "Unknown endpoint: caladon" for our custom endpoint,
+    // and that error breaks the composer submit once any SidePanel renders it. modelSelect is all
+    // the picker needs.
+    interface: { temporaryChat: true, autoSubmitFromUrl: true, modelSelect: true },
   }),
 );
 

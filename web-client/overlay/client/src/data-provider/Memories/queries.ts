@@ -34,6 +34,12 @@ function toUserMemory(m: StoredMemory): TUserMemory {
 
 async function readMemories(): Promise<MemoriesResponse> {
   const store = getStoreProxy();
+  // The panel can mount before openStore() finishes (the store worker's OPFS init trails auth).
+  // Wait briefly for it rather than caching an empty result — otherwise the list stays blank even
+  // though memories exist (recall, which reads the store at send-time, still works).
+  for (let i = 0; i < 40 && !store.isOpen; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
   if (!store.isOpen) {
     return { memories: [], totalTokens: 0, tokenLimit: null, usagePercentage: null };
   }
@@ -50,7 +56,10 @@ export const useMemoriesQuery = (
   return useQuery<MemoriesResponse>([QueryKeys.memories], () => readMemories(), {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    refetchOnMount: false,
+    // Always refetch on mount (cheap, device-local) so the panel reflects the store after the
+    // worker finishes opening and after create/update/delete — never shows a stale empty list.
+    refetchOnMount: 'always',
+    staleTime: 0,
     ...config,
   });
 };
