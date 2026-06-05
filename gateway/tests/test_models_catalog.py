@@ -56,6 +56,34 @@ async def test_fetch_filters_to_attested_only():
     ids = [m["id"] for m in out]
     assert ids == ["phala/kimi-k2.6", "phala/qwen3.6-35b-a3b-uncensored"]  # only phala/, sorted
     assert all(m["id"].startswith("phala/") for m in out)
+    assert all(m["attested"] is True for m in out)
+
+
+async def test_fetch_all_models_returns_full_catalog_with_flag():
+    out = await models_catalog.fetch_all_models(
+        base_url="https://api.x/v1", api_key="k", transport=_catalog_transport()
+    )
+    ids = [m["id"] for m in out]
+    # All 4 returned; attested (phala/) FIRST, each ordered by id; flag set per model.
+    assert ids == [
+        "phala/kimi-k2.6",
+        "phala/qwen3.6-35b-a3b-uncensored",
+        "openai/gpt-4o",
+        "qwen/qwen-2.5-7b-instruct",
+    ]
+    flags = {m["id"]: m["attested"] for m in out}
+    assert flags["phala/kimi-k2.6"] is True
+    assert flags["openai/gpt-4o"] is False
+    assert flags["qwen/qwen-2.5-7b-instruct"] is False
+
+
+async def test_is_known_model():
+    tx = _catalog_transport()
+    base = dict(base_url="https://api.k/v1", api_key="k", transport=tx)
+    assert await models_catalog.is_known_model("phala/kimi-k2.6", **base) is True   # attested, known
+    assert await models_catalog.is_known_model("openai/gpt-4o", **base) is True     # cloud, known
+    assert await models_catalog.is_known_model("openai/not-real", **base) is False  # not in catalog
+    assert await models_catalog.is_known_model("", **base) is False
 
 
 async def test_fetch_caches(monkeypatch):
@@ -97,33 +125,33 @@ def _auth(priv, acct, method, path):
     return {"Authorization": f"Swifty acct={acct} ts={ts} sig={base64.b64encode(sig).decode()}"}
 
 
-async def test_v1_models_route_returns_attested_catalog(tmp_path, monkeypatch):
+async def test_v1_models_route_returns_full_catalog_public(tmp_path, monkeypatch):
+    """The picker route returns the FULL catalog (attested + cloud, each flagged) and is PUBLIC —
+    the keyless shim proxies it server-side, so it must not require seed-auth. Non-secret data."""
     async def fake_fetch(*, base_url, api_key, **kw):
-        return [{"id": "phala/kimi-k2.6", "name": "Kimi K2.6"}]
+        return [
+            {"id": "phala/kimi-k2.6", "name": "Kimi K2.6", "attested": True},
+            {"id": "openai/gpt-4o", "name": "GPT-4o", "attested": False},
+        ]
 
-    monkeypatch.setattr(models_catalog, "fetch_attested_models", fake_fetch)
-    priv, acct, pub = _acct()
-    reg = AccountRegistry(tmp_path / "a.json")
-    reg.register(acct, pub, pub)
+    monkeypatch.setattr(models_catalog, "fetch_all_models", fake_fetch)
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: Settings(
         inference_base="https://api.x/v1", inference_model="phala/qwen3.6-35b-a3b-uncensored",
         keepwarm_models="phala/qwen3.6-35b-a3b-uncensored,phala/kimi-k2.6", device_tokens="x",
     )
-    app.dependency_overrides[get_account_registry] = lambda: reg
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        resp = await c.get("/v1/models", headers=_auth(priv, acct, "GET", "/v1/models"))
+        resp = await c.get("/v1/models")  # NO auth header — route is public
     assert resp.status_code == 200
     body = resp.json()
-    assert body["models"][0]["id"] == "phala/kimi-k2.6"
+    ids = [m["id"] for m in body["models"]]
+    assert ids == ["phala/kimi-k2.6", "openai/gpt-4o"]
+    assert {m["id"]: m["attested"] for m in body["models"]} == {
+        "phala/kimi-k2.6": True,
+        "openai/gpt-4o": False,
+    }
     assert body["default"] == "phala/qwen3.6-35b-a3b-uncensored"
     assert set(body["keepwarm"]) == {"phala/qwen3.6-35b-a3b-uncensored", "phala/kimi-k2.6"}
-
-
-async def test_v1_models_requires_auth(tmp_path):
-    app = create_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        assert (await c.get("/v1/models")).status_code == 401
 
 
 async def test_per_request_model_selection(monkeypatch):
@@ -144,10 +172,44 @@ async def test_per_request_model_selection(monkeypatch):
     monkeypatch.setattr(inference_backend, "complete", fake_complete)
     monkeypatch.setattr(mc, "is_attested", fake_is_attested)
 
-    complete = deps.get_inference(Settings(inference_base="https://api.x/v1", inference_model="phala/default"))
+    # allow_cloud_models=False makes this the strict path: a non-attested slug must fall back.
+    complete = deps.get_inference(
+        Settings(inference_base="https://api.x/v1", inference_model="phala/default", allow_cloud_models=False)
+    )
     await complete("hi", "phala/kimi-k2.6")
     assert captured["model"] == "phala/kimi-k2.6"        # attested override honoured
     await complete("hi", "phala/not-attested")
-    assert captured["model"] == "phala/default"          # non-attested -> default
+    assert captured["model"] == "phala/default"          # non-attested -> default (strict)
     await complete("hi", None)
     assert captured["model"] == "phala/default"          # unset -> default
+
+
+async def test_per_request_cloud_model_opt_in(monkeypatch):
+    """With GATEWAY_ALLOW_CLOUD_MODELS=true, a KNOWN non-attested (cloud) slug is honoured; an
+    UNKNOWN slug still falls back to the default (fail-closed on garbage)."""
+    from app import deps, inference_backend
+    from app import models_catalog as mc
+
+    captured: dict = {}
+
+    async def fake_complete(*, base_url, api_key, model, prompt, timeout):
+        captured["model"] = model
+        return "ok"
+
+    async def fake_is_attested(model, **kw):
+        return model.startswith("phala/")
+
+    async def fake_is_known(model, **kw):
+        return model in {"openai/gpt-4o", "phala/default"}
+
+    monkeypatch.setattr(inference_backend, "complete", fake_complete)
+    monkeypatch.setattr(mc, "is_attested", fake_is_attested)
+    monkeypatch.setattr(mc, "is_known_model", fake_is_known)
+
+    complete = deps.get_inference(
+        Settings(inference_base="https://api.x/v1", inference_model="phala/default", allow_cloud_models=True)
+    )
+    await complete("hi", "openai/gpt-4o")
+    assert captured["model"] == "openai/gpt-4o"   # cloud model honoured under opt-in
+    await complete("hi", "openai/not-real")
+    assert captured["model"] == "phala/default"   # unknown slug -> default (fail-closed)

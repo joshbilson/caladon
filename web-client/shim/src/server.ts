@@ -294,11 +294,36 @@ app.get('/api/endpoints', (c) =>
  * is never created → ChatView returns null → blank main pane, no composer. Omitting it lets the
  * conversation initialize and the composer render.
  */
-app.get('/api/models', (c) =>
-  c.json({
-    [CALADON_ENDPOINT]: CALADON_MODELS,
-  }),
-);
+let _modelsCache: { at: number; ids: string[] } | null = null;
+const MODELS_TTL_MS = 60_000;
+
+app.get('/api/models', async (c) => {
+  // Proxy the gateway's PUBLIC /v1/models (the real RedPill catalog: 23 attested phala/* TEE models
+  // + cloud models) and reshape to TModelsConfig { caladon: [slug, ...] }. The shim holds NO key,
+  // so the gateway route is public (non-secret provider metadata); we fetch it server-side. The SPA
+  // badges each model by its phala/ prefix (attested = confidential) — see the model-menu overlay.
+  // Cached briefly to avoid hammering the gateway on every picker open; fails OPEN to the single
+  // 'caladon' fallback so the picker always renders even if the gateway is unreachable.
+  const now = Date.now();
+  if (!_modelsCache || now - _modelsCache.at > MODELS_TTL_MS) {
+    try {
+      const r = await fetch(config.gatewayBase.replace(/\/$/, '') + '/v1/models', {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (r.ok) {
+        const body = (await r.json()) as { models?: Array<{ id?: string }> };
+        const ids = (body.models ?? [])
+          .map((m) => m.id)
+          .filter((x): x is string => typeof x === 'string' && x.length > 0);
+        _modelsCache = { at: now, ids };
+      }
+    } catch {
+      /* fall through to fail-open below */
+    }
+  }
+  const ids = _modelsCache?.ids?.length ? _modelsCache.ids : CALADON_MODELS;
+  return c.json({ [CALADON_ENDPOINT]: ids });
+});
 
 /* ---------------------------------------------------------------------------------------------
  * Chat-UI boot queries (G4, second wave). After auth the chat shell fires these; if any 404s or

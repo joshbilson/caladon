@@ -137,12 +137,19 @@ def get_inference(settings: Settings = Depends(get_settings)):
 
         chosen = settings.inference_model
         if model and model != chosen:
-            # Per-request model switch (instant + mid-session). TRUST-NO-ONE: only honour it if
-            # the model is in the attested (TEE-served) allowlist; otherwise fall back to the
-            # configured attested default rather than routing a prompt to a non-confidential model.
+            # Per-request model switch (instant + mid-session). TRUST-NO-ONE default: only honour
+            # an ATTESTED (TEE-served) model; otherwise fall back to the configured attested
+            # default rather than routing a prompt to a non-confidential backend.
             if await models_catalog.is_attested(
                 model, base_url=settings.inference_base, api_key=settings.inference_key
             ):
+                chosen = model
+            elif settings.allow_cloud_models and await models_catalog.is_known_model(
+                model, base_url=settings.inference_base, api_key=settings.inference_key
+            ):
+                # Deployment opted into CLOUD models: honour a real (non-attested) catalog slug.
+                # The user picked a model the app LABELS non-confidential; the gateway forwards the
+                # opened prompt to that third-party model. Still fail-closed for an UNKNOWN slug.
                 chosen = model
         return await inference_backend.complete(
             base_url=settings.inference_base, api_key=settings.inference_key,

@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     inference_base: str = ""
     inference_key: str = Field(default="", repr=False)
     inference_model: str = "phala/qwen-2.5-7b-instruct"
+    # Trust posture for per-request model switching.
+    #   TRUE  (Caladon product default): honour a per-request CLOUD model too (any real slug in the
+    #          provider catalog) — the gateway opens the sealed prompt in-CVM, then forwards it to
+    #          that third-party model IN THE CLEAR. The app surfaces ALL models but LABELS the
+    #          non-attested (non-`phala/`) ones as non-confidential so the choice is explicit
+    #          (product decision 2026-06-05). The DEFAULT model + any unrequested turn stay attested.
+    #   FALSE (strict trust-no-one; set GATEWAY_ALLOW_CLOUD_MODELS=false): only attested (`phala/`)
+    #          models are honoured; a non-attested slug falls back to the attested default, so a
+    #          prompt is NEVER routed to a non-confidential backend.
+    # Note: this is a code default (not in the compose), so flipping the product default does NOT
+    # change the CVM compose_hash / attestation pin. A self-hoster overrides it via env.
+    allow_cloud_models: bool = True
     # Upstream completion timeout (s). Generous by default: attested models on Phala scale to
     # zero, so the FIRST request after idle pays a cold-start (~3-4 min for the 35B H200 enclave);
     # a short timeout would hard-fail that turn. Warm turns are far faster.

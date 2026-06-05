@@ -26,11 +26,14 @@ _CACHE: dict[str, tuple[float, list[dict]]] = {}
 _TTL = 300.0  # refresh the catalog at most every 5 min
 
 
-async def fetch_attested_models(*, base_url: str, api_key: str, timeout: float = 15.0, transport=None) -> list[dict]:
-    """Return the attested (TEE-served) models from the provider catalog: `[{id, name,
-    context_length, pricing}]`. Cached for `_TTL`. Fails closed to the last good cache (or
-    empty) on a transport error — a stale list is fine; an exception would 500 the picker.
-    `transport` is injectable for tests (httpx.MockTransport)."""
+async def fetch_all_models(*, base_url: str, api_key: str, timeout: float = 15.0, transport=None) -> list[dict]:
+    """Return the FULL provider catalog: `[{id, name, context_length, pricing, attested}]`.
+    `attested` is True for TEE-served (`phala/`-prefixed) models — a turn routed to them stays
+    confidential end-to-end; the rest are non-confidential CLOUD models (the gateway opens the
+    sealed prompt in-CVM, then forwards it to a third-party provider in the clear). The app
+    surfaces ALL of them but must LABEL the non-attested ones so the user chooses knowingly
+    (product decision 2026-06-05). Cached for `_TTL`; fails closed to the last good cache (or
+    empty) on a transport error. `transport` is injectable for tests (httpx.MockTransport)."""
     now = time.monotonic()
     cached = _CACHE.get(base_url)
     if cached and now - cached[0] < _TTL:
@@ -50,13 +53,33 @@ async def fetch_attested_models(*, base_url: str, api_key: str, timeout: float =
             "name": m.get("name", m["id"]),
             "context_length": m.get("context_length"),
             "pricing": m.get("pricing"),
+            "attested": m["id"].startswith(ATTESTED_PREFIX),
         }
         for m in data
-        if isinstance(m.get("id"), str) and m["id"].startswith(ATTESTED_PREFIX)
+        if isinstance(m.get("id"), str)
     ]
-    models.sort(key=lambda m: m["id"])
+    # Attested (confidential) first, then alphabetical — a sensible default order for the picker.
+    models.sort(key=lambda m: (not m["attested"], m["id"]))
     _CACHE[base_url] = (now, models)
     return models
+
+
+async def fetch_attested_models(*, base_url: str, api_key: str, timeout: float = 15.0, transport=None) -> list[dict]:
+    """The attested (TEE-served) subset of the catalog — used for keep-warm + attestation checks."""
+    catalog = await fetch_all_models(base_url=base_url, api_key=api_key, timeout=timeout, transport=transport)
+    return [m for m in catalog if m.get("attested")]
+
+
+async def is_known_model(model: str, *, base_url: str, api_key: str, transport=None) -> bool:
+    """True iff `model` is a real slug in the FULL provider catalog (attested OR cloud). Gates a
+    per-request CLOUD model switch (only when the deployment opts into cloud models): we still
+    refuse a slug that isn't a real provider model, but we DON'T require it to be attested."""
+    if not model:
+        return False
+    models = await fetch_all_models(base_url=base_url, api_key=api_key, transport=transport)
+    if not models:
+        return False
+    return any(m["id"] == model for m in models)
 
 
 async def is_attested(model: str, *, base_url: str, api_key: str, transport=None) -> bool:
