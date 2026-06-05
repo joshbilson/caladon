@@ -33,6 +33,7 @@ import { augmentPromptWithRAG } from '~/lib/rag/retrieval';
 import { injectMemoriesIntoPrompt } from '~/lib/memory/inject';
 import { injectArtifactsIntoPrompt } from '~/lib/artifacts/inject';
 import { injectActiveSkillIntoPrompt } from '~/lib/skills/inject';
+import { orchestrateSubagents } from '~/lib/subagents/orchestrate';
 import { getStoreProxy } from '~/lib/store';
 import type { StoredConversation, StoredMessage } from '~/lib/store';
 import store from '~/store';
@@ -202,6 +203,8 @@ export default function useSSE(
 
       const rawPromptText = String((payload as { text?: string }).text ?? '');
       let model = (payload as { model?: string }).model;
+      // Subagent steps (if the active agent delegates to a chain) — rendered above the final reply.
+      let subagentStepsText = '';
 
       // RAG (trust-critical): retrieve relevant on-device chunks and PREPEND a <context> block to
       // the prompt BEFORE it is sealed, so the gateway only ever sees the sealed envelope — the
@@ -230,6 +233,30 @@ export default function useSSE(
           if (agent) {
             if (agent.model) {
               model = agent.model;
+            }
+            // SUBAGENTS (trust-critical, client-orchestrated): if this agent delegates to a chain
+            // (agent_ids in its config), run each subagent as a headless sealed completion FIRST and
+            // prepend their synthesised context so the main agent composes the final answer. Each
+            // sub-call is a normal sealed round-trip — no new trust surface, no gateway change.
+            let agentIds: string[] = [];
+            try {
+              const cfg = JSON.parse(agent.configJson) as { agent_ids?: string[] };
+              agentIds = Array.isArray(cfg.agent_ids) ? cfg.agent_ids : [];
+            } catch {
+              /* no chain */
+            }
+            if (agentIds.length) {
+              try {
+                const { steps, context } = await orchestrateSubagents(agentIds, promptText);
+                if (context) {
+                  promptText = `${context}\n\n${promptText}`;
+                  subagentStepsText = steps
+                    .map((s) => `> 🤝 **${s.name}** consulted\n\n`)
+                    .join('');
+                }
+              } catch {
+                /* fail open: proceed without subagents */
+              }
             }
             if (agent.instructions && agent.instructions.trim()) {
               promptText = `${agent.instructions.trim()}\n\n${promptText}`;
@@ -361,8 +388,9 @@ export default function useSSE(
 
       let accumulatedText = '';
       // In-CVM tool steps (MCP) arrive sealed as `event: tool` BEFORE the final token; we render them
-      // as a small prefix above the answer so the user sees what ran inside the CVM.
-      let toolStepsText = '';
+      // as a small prefix above the answer so the user sees what ran inside the CVM. Seeded with any
+      // subagent-consultation steps computed pre-send (client-orchestrated subagent chain).
+      let toolStepsText = subagentStepsText;
       const render = () =>
         setMessages([
           ...submission.messages,
