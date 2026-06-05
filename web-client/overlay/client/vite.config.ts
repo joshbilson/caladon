@@ -119,6 +119,18 @@ export default defineConfig(({ command }) => ({
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         /** LibreChat mutates index.html per request for subpath and language support. */
         navigateFallback: null,
+        /**
+         * Caladon deploy-hygiene fix: after a deploy, a returning visitor's previous service worker
+         * was serving its old precache and the app rendered nothing until the SW was manually
+         * unregistered (verified on prod v12 — clearing the SW fixed an empty conversation view).
+         * `cleanupOutdatedCaches` purges precaches from prior SW revisions, and skipWaiting +
+         * clientsClaim make the freshly-installed SW take control of open pages immediately instead
+         * of waiting for every tab to close. Together with registerType:'autoUpdate' this makes new
+         * deploys self-heal for existing clients.
+         */
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
       },
       includeAssets: [],
       manifest: {

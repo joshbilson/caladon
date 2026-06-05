@@ -31,6 +31,7 @@ import {
 } from '~/lib/caladon';
 import { augmentPromptWithRAG } from '~/lib/rag/retrieval';
 import { injectMemoriesIntoPrompt } from '~/lib/memory/inject';
+import { injectArtifactsIntoPrompt } from '~/lib/artifacts/inject';
 import { getStoreProxy } from '~/lib/store';
 import type { StoredConversation, StoredMessage } from '~/lib/store';
 import store from '~/store';
@@ -233,6 +234,15 @@ export default function useSSE(
           /* fail open: send as a normal turn */
         }
       }
+
+      // ARTIFACTS (client-side): when the conversation's artifacts toggle is on, prepend the
+      // artifact authoring instructions so the model emits :::artifact{}::: markup that our
+      // trust-no-one renderer (ArtifactPreview overlay) displays. Injected inside the trust boundary
+      // and sealed with the prompt; the gateway never sees a separate system prompt. No-op when off.
+      promptText = injectArtifactsIntoPrompt(
+        promptText,
+        (submission.conversation as { artifacts?: string } | undefined)?.artifacts,
+      );
 
       let wireBody: unknown;
       let authHeader: string;
