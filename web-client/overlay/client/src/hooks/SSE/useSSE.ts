@@ -244,10 +244,22 @@ export default function useSSE(
         (submission.conversation as { artifacts?: string } | undefined)?.artifacts,
       );
 
+      // TOOLS (in-CVM MCP loop): opt-in via the composer "Tools" toggle (localStorage). When on, the
+      // sealed body carries tools:true so the gateway runs the in-CVM tool loop; yolo bypasses the
+      // egress allowlist for the turn. No-op when off (a normal turn's body is unchanged).
+      let toolsEnabled = false;
+      let toolsYolo = false;
+      try {
+        toolsEnabled = localStorage.getItem('caladon:toolsEnabled') === 'true';
+        toolsYolo = localStorage.getItem('caladon:toolsYolo') === 'true';
+      } catch {
+        /* default off */
+      }
+
       let wireBody: unknown;
       let authHeader: string;
       try {
-        wireBody = await sealChat(promptText, model);
+        wireBody = await sealChat(promptText, model, { tools: toolsEnabled, toolsYolo });
         authHeader = await signRequest('POST', CALADON_GATEWAY_CHAT_PATH);
       } catch (err) {
         const message =
@@ -343,6 +355,15 @@ export default function useSSE(
       };
 
       let accumulatedText = '';
+      // In-CVM tool steps (MCP) arrive sealed as `event: tool` BEFORE the final token; we render them
+      // as a small prefix above the answer so the user sees what ran inside the CVM.
+      let toolStepsText = '';
+      const render = () =>
+        setMessages([
+          ...submission.messages,
+          stampedUserMessage,
+          buildResponseMessage(toolStepsText + accumulatedText),
+        ]);
       // Serialize delta processing into a chain so (a) accumulation order is preserved under the
       // async openDelta, and (b) the 'done' handler can AWAIT all in-flight deltas before it
       // finalizes/persists. ROOT CAUSE of "assistant replies blank after reload": 'done' fires when
@@ -358,11 +379,7 @@ export default function useSSE(
             // full assistant message on each token (mirrors upstream token streaming, which replaces).
             accumulatedText += await openDelta(envelope);
             setIsSubmitting(true);
-            setMessages([
-              ...submission.messages,
-              stampedUserMessage,
-              buildResponseMessage(accumulatedText),
-            ]);
+            render();
           } catch (error) {
             console.error('Error opening sealed delta:', error);
           }
@@ -370,6 +387,33 @@ export default function useSSE(
       };
       sse.addEventListener('token', onSealedDelta);
       sse.addEventListener('reasoning', onSealedDelta);
+
+      // Sealed in-CVM tool step: plaintext is JSON {tool, args, result}. Render as a compact line.
+      sse.addEventListener('tool', (e: MessageEvent) => {
+        deltaChain = deltaChain.then(async () => {
+          try {
+            const { envelope } = JSON.parse(e.data) as { envelope: import('@caladon/protocol').Envelope };
+            const step = JSON.parse(await openDelta(envelope)) as {
+              tool?: string;
+              args?: unknown;
+              result?: string;
+            };
+            const argStr = (() => {
+              try {
+                return JSON.stringify(step.args ?? {});
+              } catch {
+                return '{}';
+              }
+            })();
+            const result = String(step.result ?? '').slice(0, 500);
+            toolStepsText += `> 🔧 **${step.tool ?? 'tool'}**(\`${argStr}\`) → \`${result}\`\n\n`;
+            setIsSubmitting(true);
+            render();
+          } catch (error) {
+            console.error('Error opening sealed tool step:', error);
+          }
+        });
+      });
 
       /** Per-response attestation receipt (SURGERY.md §D3.5) — verify; drop + stop on mismatch. */
       sse.addEventListener('receipt', () => {
@@ -390,7 +434,7 @@ export default function useSSE(
           finalHandler(
             {
               requestMessage: stampedUserMessage,
-              responseMessage: buildResponseMessage(accumulatedText),
+              responseMessage: buildResponseMessage(toolStepsText + accumulatedText),
               conversation: {
                 ...(submission.conversation ?? {}),
                 conversationId,
@@ -404,7 +448,7 @@ export default function useSSE(
           setMessages([
             ...submission.messages,
             stampedUserMessage,
-            buildResponseMessage(accumulatedText),
+            buildResponseMessage(toolStepsText + accumulatedText),
           ]);
           setIsSubmitting(false);
           setShowStopButton(false);
@@ -426,7 +470,7 @@ export default function useSSE(
           persistTurnToStore(
             conversationId,
             stampedUserMessage,
-            buildResponseMessage(accumulatedText),
+            buildResponseMessage(toolStepsText + accumulatedText),
             { ...(submission.conversation ?? {}), conversationId } as TConversation,
           );
         }

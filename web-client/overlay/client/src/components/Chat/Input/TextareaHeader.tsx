@@ -1,9 +1,70 @@
 import { memo, useState } from 'react';
-import { Paperclip } from 'lucide-react';
+import { Paperclip, Wrench } from 'lucide-react';
 import AddedConvo from './AddedConvo';
 import RagFileAttach from '~/components/Caladon/RagFileAttach';
 import type { TConversation } from 'librechat-data-provider';
 import type { SetterOrUpdater } from 'recoil';
+
+const readFlag = (k: string) => {
+  try {
+    return localStorage.getItem(k) === 'true';
+  } catch {
+    return false;
+  }
+};
+const writeFlag = (k: string, v: boolean) => {
+  try {
+    localStorage.setItem(k, v ? 'true' : 'false');
+  } catch {
+    /* ignore */
+  }
+};
+
+/**
+ * Caladon "Tools" toggle. When ON, a chat turn runs the in-CVM tool loop (MCP): the gateway routes
+ * it to a function-calling attested model and executes tools INSIDE the CVM behind a fail-closed
+ * egress allowlist (see gateway/app/mcp_broker). "Yolo" bypasses the host allowlist for the turn
+ * (the SSRF guard still blocks internal targets). Flags are read by useSSE → sealChat. Opt-in
+ * (default off) because tool turns are routed to a specific model and run slower.
+ */
+function ToolsToggle() {
+  const [on, setOn] = useState(() => readFlag('caladon:toolsEnabled'));
+  const [yolo, setYolo] = useState(() => readFlag('caladon:toolsYolo'));
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => {
+          const next = !on;
+          setOn(next);
+          writeFlag('caladon:toolsEnabled', next);
+        }}
+        aria-pressed={on}
+        title="Run this chat through the in-CVM tool loop (MCP). Tools execute inside the attested CVM."
+        className={
+          'inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors hover:bg-surface-tertiary ' +
+          (on ? 'text-emerald-500' : 'text-text-secondary hover:text-text-primary')
+        }
+      >
+        <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+        {on ? 'Tools: on' : 'Tools: off'}
+      </button>
+      {on && (
+        <label className="inline-flex cursor-pointer items-center gap-1 text-xs text-text-secondary" title="Bypass the egress allowlist for tool web access (SSRF-internal targets still blocked).">
+          <input
+            type="checkbox"
+            checked={yolo}
+            onChange={(e) => {
+              setYolo(e.target.checked);
+              writeFlag('caladon:toolsYolo', e.target.checked);
+            }}
+          />
+          yolo
+        </label>
+      )}
+    </span>
+  );
+}
 
 /**
  * Caladon overlay of TextareaHeader. Upstream renders only the AddedConvo strip (multi-convo). We
@@ -43,6 +104,9 @@ export default memo(function TextareaHeader({
           <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
           {ragOpen ? 'Hide document retrieval' : 'Attach documents (on-device retrieval)'}
         </button>
+        <span className="ml-1 inline-flex align-middle">
+          <ToolsToggle />
+        </span>
         {ragOpen && (
           <div className="mt-1.5 rounded-2xl border border-border-light bg-surface-secondary-alt p-3">
             <RagFileAttach compact />

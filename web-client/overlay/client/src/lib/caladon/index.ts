@@ -163,12 +163,27 @@ function requireSession(): { sk: Uint8Array; accountId: string } {
  * Seal a chat prompt for `POST /v1/chat` (SURGERY.md §D, createPayload call site). Returns the
  * on-wire envelope JSON the body carries: `{ envelope, model }`. The plaintext never leaves here.
  */
-export async function sealChat(prompt: string, model?: string): Promise<{ envelope: Envelope; model?: string }> {
+export async function sealChat(
+  prompt: string,
+  model?: string,
+  opts?: { tools?: boolean; toolsYolo?: boolean },
+): Promise<{ envelope: Envelope; model?: string; tools?: boolean; tools_yolo?: boolean }> {
   const { sk, accountId } = requireSession();
   const w = await getWasm();
   const sealed = w.seal_chat(sk, new TextEncoder().encode(prompt), accountId, BigInt(ENVELOPE_V));
   const envelope = await toWire(sealed, accountId);
-  return model ? { envelope, model } : { envelope };
+  const body: { envelope: Envelope; model?: string; tools?: boolean; tools_yolo?: boolean } = { envelope };
+  if (model) {
+    body.model = model;
+  }
+  // In-CVM tool loop (MCP). Only attach the flags when on, so a normal turn's wire body is unchanged.
+  if (opts?.tools) {
+    body.tools = true;
+    if (opts.toolsYolo) {
+      body.tools_yolo = true;
+    }
+  }
+  return body;
 }
 
 /**
