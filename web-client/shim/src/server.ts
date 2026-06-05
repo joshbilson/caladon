@@ -181,7 +181,13 @@ app.get('/api/config', (c) =>
     //                         persisted to the on-device store (useSSE skips persistTurn). Pairs
     //                         with the TEMPORARY_CHAT.USE role permission above.
     //   - autoSubmitFromUrl — allow a prompt passed in the URL to auto-submit on load.
-    interface: { temporaryChat: true, autoSubmitFromUrl: true },
+    //   - modelSelect       — REQUIRED for the model picker to render. interfaceSchema makes every
+    //                         field optional, and this partial object OVERRIDES the defaults, so an
+    //                         omitted modelSelect reads as falsy → useEndpoints.filteredEndpoints
+    //                         returns [] → the model dropdown renders EMPTY. Must be true so the
+    //                         endpoints/models map into the picker.
+    //   - parameters        — show the per-conversation parameters panel (model settings).
+    interface: { temporaryChat: true, autoSubmitFromUrl: true, modelSelect: true, parameters: true },
   }),
 );
 
