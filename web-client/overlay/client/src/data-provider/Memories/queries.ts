@@ -54,11 +54,14 @@ export const useMemoriesQuery = (
   config?: UseQueryOptions<MemoriesResponse>,
 ): QueryObserverResult<MemoriesResponse> => {
   return useQuery<MemoriesResponse>([QueryKeys.memories], () => readMemories(), {
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
     refetchOnReconnect: false,
     // Always refetch on mount (cheap, device-local) so the panel reflects the store after the
-    // worker finishes opening and after create/update/delete — never shows a stale empty list.
+    // worker finishes opening. Poll while the panel is open so create/update/delete show within ~1s:
+    // the device store has no server events and cross-component invalidation proved unreliable
+    // through the dialog/panel mount lifecycle, so a light poll is the robust source of truth.
     refetchOnMount: 'always',
+    refetchInterval: 1500,
     staleTime: 0,
     ...config,
   });
