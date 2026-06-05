@@ -111,8 +111,11 @@ RUN bash web-client/apply-overlay.sh
 
 # ── 4. Install the monorepo deps + build the shared packages. ──
 WORKDIR /build/web-client/librechat
+# MONGOMS_DISABLE_POSTINSTALL: skip mongodb-memory-server's postinstall (it downloads + spawns a
+# Mongo binary — a LibreChat *server-test* dep irrelevant to this SPA build). Under build-host memory
+# pressure that postinstall segfaulted (exit 139); skipping it removes a flaky step + a wasted download.
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --no-audit --no-fund
+    MONGOMS_DISABLE_POSTINSTALL=1 npm install --no-audit --no-fund
 RUN npm run build:packages   # data-provider → data-schemas → api → client-package
 
 # ── 5. Build the SPA with the Caladon build-time env. ──
@@ -128,7 +131,12 @@ ENV VITE_CALADON_PINNED=${VITE_CALADON_PINNED} \
     VITE_CALADON_SHIM_BASE=${VITE_CALADON_SHIM_BASE} \
     NODE_ENV=production
 WORKDIR /build/web-client/librechat/client
-RUN npm run build
+# The upstream `build` script hardcodes NODE_OPTIONS=--max-old-space-size=8192 (cross-env), i.e. the
+# WHOLE 8GB build VM — leaving no headroom for the OS + native bundler, which OOM-segfaulted (exit
+# 139) under build-host memory pressure. Invoke vite directly with a 6GB cap (ample for this SPA) so
+# the build fits with headroom, then run the same post-build step the script would.
+RUN NODE_ENV=production NODE_OPTIONS=--max-old-space-size=6144 npx vite build \
+    && node ./scripts/post-build.cjs
 # → /build/web-client/librechat/client/dist  (index.html + assets/, single-origin SPA)
 
 
