@@ -32,6 +32,7 @@ import {
 import { augmentPromptWithRAG } from '~/lib/rag/retrieval';
 import { injectMemoriesIntoPrompt } from '~/lib/memory/inject';
 import { injectArtifactsIntoPrompt } from '~/lib/artifacts/inject';
+import { injectActiveSkillIntoPrompt } from '~/lib/skills/inject';
 import { getStoreProxy } from '~/lib/store';
 import type { StoredConversation, StoredMessage } from '~/lib/store';
 import store from '~/store';
@@ -212,6 +213,10 @@ export default function useSSE(
       // MEMORY (trust-critical): prepend the user's persistent on-device memories the same way —
       // inside the trust boundary, sealed with the prompt. Fails OPEN to the un-augmented prompt.
       let promptText = await injectMemoriesIntoPrompt(ragPromptText);
+
+      // SKILLS (trust-critical): if a reusable skill is active, prepend its instruction body the
+      // same way — inside the trust boundary, sealed with the prompt. Fails OPEN. Device-only.
+      promptText = await injectActiveSkillIntoPrompt(promptText);
 
       // AGENTS (trust-critical): if this turn targets a user agent (endpoint 'agents' → payload
       // carries agent_id), resolve the agent from the DEVICE store and apply its config CLIENT-SIDE

@@ -22,6 +22,7 @@ import type {
   StoredVector,
   StoredMemory,
   StoredAgent,
+  StoredSkill,
   SearchHit,
   VectorChunk,
 } from './types';
@@ -271,6 +272,39 @@ export class StoreProxy {
   async deleteAgent(agentId: string): Promise<void> {
     await this.ready;
     await this.send({ type: 'DELETE_AGENT', requestId: nextRequestId(), agentId });
+  }
+
+  /** Create or update a reusable skill (instruction snippet). */
+  async upsertSkill(skill: StoredSkill): Promise<void> {
+    await this.ready;
+    await this.send({ type: 'UPSERT_SKILL', requestId: nextRequestId(), skill });
+  }
+
+  /** Load one skill by id (null if absent). */
+  async getSkill(skillId: string): Promise<StoredSkill | null> {
+    await this.ready;
+    const res = await this.send<Extract<StoreResponse, { type: 'SKILL' }>>({
+      type: 'GET_SKILL',
+      requestId: nextRequestId(),
+      skillId,
+    });
+    return res.skill;
+  }
+
+  /** List all skills (most-recently-updated first). */
+  async listSkills(): Promise<StoredSkill[]> {
+    await this.ready;
+    const res = await this.send<Extract<StoreResponse, { type: 'SKILLS' }>>({
+      type: 'LIST_SKILLS',
+      requestId: nextRequestId(),
+    });
+    return res.skills;
+  }
+
+  /** Delete a skill by id. */
+  async deleteSkill(skillId: string): Promise<void> {
+    await this.ready;
+    await this.send({ type: 'DELETE_SKILL', requestId: nextRequestId(), skillId });
   }
 
   /** Wipe every table (logout / panic). The store stays open; data is gone. */

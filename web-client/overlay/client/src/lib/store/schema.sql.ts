@@ -17,7 +17,7 @@
  * This DDL is idempotent (`IF NOT EXISTS`) so re-opening an existing store is a no-op.
  */
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = /* sql */ `
 PRAGMA foreign_keys = ON;
@@ -137,6 +137,19 @@ CREATE TABLE IF NOT EXISTS agents (
   configJson   TEXT NOT NULL,
   createdAt    INTEGER NOT NULL,
   updatedAt    INTEGER NOT NULL
+);
+
+-- User-authored SKILLS (trust-no-one: on-device only). A skill is a saved, reusable instruction/
+-- prompt snippet (e.g. "Summarise as 5 bullets", "Translate to French") the user can apply to a
+-- turn. When a skill is active, the client prepends its body to the prompt BEFORE sealing (see
+-- lib/skills/inject.ts + useSSE) — exactly like memory. Device-only; the gateway never stores skills.
+CREATE TABLE IF NOT EXISTS skills (
+  skillId     TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  description TEXT,
+  body        TEXT NOT NULL,
+  createdAt   INTEGER NOT NULL,
+  updatedAt   INTEGER NOT NULL
 );
 
 PRAGMA user_version = ${SCHEMA_VERSION};

@@ -30,6 +30,7 @@ import type {
   StoredVector,
   StoredMemory,
   StoredAgent,
+  StoredSkill,
   SearchHit,
 } from '../types';
 
@@ -765,6 +766,42 @@ function deleteAgent(agentId: string): void {
   run('DELETE FROM agents WHERE agentId = ?', [agentId]);
 }
 
+/* ---- Skills (reusable instruction snippets; device-only) ---- */
+
+function rowToSkill(r: Record<string, unknown>): StoredSkill {
+  return {
+    skillId: String(r.skillId),
+    name: String(r.name),
+    description: (r.description as string | null) ?? null,
+    body: String(r.body),
+    createdAt: Number(r.createdAt),
+    updatedAt: Number(r.updatedAt),
+  };
+}
+
+function upsertSkill(s: StoredSkill): void {
+  run(
+    `INSERT INTO skills (skillId, name, description, body, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(skillId) DO UPDATE SET
+       name=excluded.name, description=excluded.description, body=excluded.body, updatedAt=excluded.updatedAt`,
+    [s.skillId, s.name, s.description, s.body, s.createdAt, s.updatedAt],
+  );
+}
+
+function getSkill(skillId: string): StoredSkill | null {
+  const rows = query('SELECT * FROM skills WHERE skillId = ?', [skillId]);
+  return rows.length ? rowToSkill(rows[0]!) : null;
+}
+
+function listSkills(): StoredSkill[] {
+  return query('SELECT * FROM skills ORDER BY updatedAt DESC').map(rowToSkill);
+}
+
+function deleteSkill(skillId: string): void {
+  run('DELETE FROM skills WHERE skillId = ?', [skillId]);
+}
+
 /* ------------------------------------------------------------------ *
  * Clear all
  * ------------------------------------------------------------------ */
@@ -780,6 +817,7 @@ function clearAll(): void {
     mustDb().exec('DELETE FROM conversations');
     mustDb().exec('DELETE FROM memories');
     mustDb().exec('DELETE FROM agents');
+    mustDb().exec('DELETE FROM skills');
   });
   mustDb().exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
 }
@@ -863,6 +901,16 @@ async function handle(req: StoreRequest): Promise<StoreResponse> {
     case 'LIST_AGENTS':
       return { type: 'AGENTS', requestId: req.requestId, agents: listAgents() };
 
+    case 'UPSERT_SKILL':
+      upsertSkill(req.skill);
+      return { type: 'OK', requestId: req.requestId };
+    case 'GET_SKILL':
+      return { type: 'SKILL', requestId: req.requestId, skill: getSkill(req.skillId) };
+    case 'LIST_SKILLS':
+      return { type: 'SKILLS', requestId: req.requestId, skills: listSkills() };
+    case 'DELETE_SKILL':
+      deleteSkill(req.skillId);
+      return { type: 'OK', requestId: req.requestId };
     case 'DELETE_AGENT':
       deleteAgent(req.agentId);
       return { type: 'OK', requestId: req.requestId };

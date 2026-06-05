@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { Paperclip, Wrench } from 'lucide-react';
 import AddedConvo from './AddedConvo';
 import RagFileAttach from '~/components/Caladon/RagFileAttach';
+import SkillsControl from '~/components/Caladon/SkillsControl';
 import type { TConversation } from 'librechat-data-provider';
 import type { SetterOrUpdater } from 'recoil';
 
@@ -106,6 +107,9 @@ export default memo(function TextareaHeader({
         </button>
         <span className="ml-1 inline-flex align-middle">
           <ToolsToggle />
+        </span>
+        <span className="ml-1 inline-flex align-middle">
+          <SkillsControl />
         </span>
         {ragOpen && (
           <div className="mt-1.5 rounded-2xl border border-border-light bg-surface-secondary-alt p-3">

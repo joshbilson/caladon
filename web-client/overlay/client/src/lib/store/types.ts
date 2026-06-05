@@ -252,6 +252,47 @@ export interface DeleteAgentRequest {
   agentId: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * Skills (user-authored reusable instruction/prompt snippets; device-only)
+ * ------------------------------------------------------------------ */
+
+/** One persisted skill (a reusable instruction the user can apply to a turn). */
+export interface StoredSkill {
+  skillId: string;
+  name: string;
+  description: string | null;
+  body: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Create or update a skill (INSERT OR REPLACE by skillId). */
+export interface UpsertSkillRequest {
+  type: 'UPSERT_SKILL';
+  requestId: string;
+  skill: StoredSkill;
+}
+
+/** Load one skill by id. */
+export interface GetSkillRequest {
+  type: 'GET_SKILL';
+  requestId: string;
+  skillId: string;
+}
+
+/** List all skills (most-recently-updated first). */
+export interface ListSkillsRequest {
+  type: 'LIST_SKILLS';
+  requestId: string;
+}
+
+/** Delete a skill by id. */
+export interface DeleteSkillRequest {
+  type: 'DELETE_SKILL';
+  requestId: string;
+  skillId: string;
+}
+
 /** The full request union. */
 export type StoreRequest =
   | InitRequest
@@ -271,6 +312,10 @@ export type StoreRequest =
   | GetAgentRequest
   | ListAgentsRequest
   | DeleteAgentRequest
+  | UpsertSkillRequest
+  | GetSkillRequest
+  | ListSkillsRequest
+  | DeleteSkillRequest
   | ClearAllRequest;
 
 /** Discriminant union of request `type`s. */
@@ -349,6 +394,20 @@ export interface AgentResponse {
   agent: StoredAgent | null;
 }
 
+/** All persisted skills (most-recently-updated first). */
+export interface SkillsResponse {
+  type: 'SKILLS';
+  requestId: string;
+  skills: StoredSkill[];
+}
+
+/** A single skill (or null if not found). */
+export interface SkillResponse {
+  type: 'SKILL';
+  requestId: string;
+  skill: StoredSkill | null;
+}
+
 /** The full response union. */
 export type StoreResponse =
   | OkResponse
@@ -359,7 +418,9 @@ export type StoreResponse =
   | VectorsResponse
   | MemoriesResponse
   | AgentsResponse
-  | AgentResponse;
+  | AgentResponse
+  | SkillsResponse
+  | SkillResponse;
 
 /** Discriminant union of response `type`s. */
 export type StoreResponseType = StoreResponse['type'];

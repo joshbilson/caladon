@@ -28,6 +28,7 @@ export type {
   StoredVector,
   StoredMemory,
   StoredAgent,
+  StoredSkill,
   VectorChunk,
   SearchHit,
   // Request shapes
