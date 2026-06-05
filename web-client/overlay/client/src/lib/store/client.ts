@@ -21,6 +21,7 @@ import type {
   StoredMessage,
   StoredVector,
   StoredMemory,
+  StoredAgent,
   SearchHit,
   VectorChunk,
 } from './types';
@@ -237,6 +238,39 @@ export class StoreProxy {
       requestId: nextRequestId(),
     });
     return res.memories;
+  }
+
+  /** Create or update an agent (device-only). */
+  async upsertAgent(agent: StoredAgent): Promise<void> {
+    await this.ready;
+    await this.send({ type: 'UPSERT_AGENT', requestId: nextRequestId(), agent });
+  }
+
+  /** Load one agent by id (null if absent). */
+  async getAgent(agentId: string): Promise<StoredAgent | null> {
+    await this.ready;
+    const res = await this.send<Extract<StoreResponse, { type: 'AGENT' }>>({
+      type: 'GET_AGENT',
+      requestId: nextRequestId(),
+      agentId,
+    });
+    return res.agent;
+  }
+
+  /** List all agents (most-recently-updated first). */
+  async listAgents(): Promise<StoredAgent[]> {
+    await this.ready;
+    const res = await this.send<Extract<StoreResponse, { type: 'AGENTS' }>>({
+      type: 'LIST_AGENTS',
+      requestId: nextRequestId(),
+    });
+    return res.agents;
+  }
+
+  /** Delete an agent by id. */
+  async deleteAgent(agentId: string): Promise<void> {
+    await this.ready;
+    await this.send({ type: 'DELETE_AGENT', requestId: nextRequestId(), agentId });
   }
 
   /** Wipe every table (logout / panic). The store stays open; data is gone. */

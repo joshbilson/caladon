@@ -29,6 +29,7 @@ import type {
   StoredMessage,
   StoredVector,
   StoredMemory,
+  StoredAgent,
   SearchHit,
 } from '../types';
 
@@ -720,6 +721,51 @@ function listMemories(): StoredMemory[] {
 }
 
 /* ------------------------------------------------------------------ *
+ * Agents (user-authored assistant configs; device-only)
+ * ------------------------------------------------------------------ */
+
+function rowToAgent(r: Record<string, unknown>): StoredAgent {
+  return {
+    agentId: String(r.agentId),
+    name: String(r.name),
+    description: (r.description as string | null) ?? null,
+    instructions: (r.instructions as string | null) ?? null,
+    model: (r.model as string | null) ?? null,
+    provider: (r.provider as string | null) ?? null,
+    tools: (r.tools as string | null) ?? null,
+    configJson: String(r.configJson),
+    createdAt: Number(r.createdAt),
+    updatedAt: Number(r.updatedAt),
+  };
+}
+
+function upsertAgent(a: StoredAgent): void {
+  run(
+    `INSERT INTO agents
+       (agentId, name, description, instructions, model, provider, tools, configJson, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(agentId) DO UPDATE SET
+       name=excluded.name, description=excluded.description, instructions=excluded.instructions,
+       model=excluded.model, provider=excluded.provider, tools=excluded.tools,
+       configJson=excluded.configJson, updatedAt=excluded.updatedAt`,
+    [a.agentId, a.name, a.description, a.instructions, a.model, a.provider, a.tools, a.configJson, a.createdAt, a.updatedAt],
+  );
+}
+
+function getAgent(agentId: string): StoredAgent | null {
+  const rows = query('SELECT * FROM agents WHERE agentId = ?', [agentId]);
+  return rows.length ? rowToAgent(rows[0]!) : null;
+}
+
+function listAgents(): StoredAgent[] {
+  return query('SELECT * FROM agents ORDER BY updatedAt DESC').map(rowToAgent);
+}
+
+function deleteAgent(agentId: string): void {
+  run('DELETE FROM agents WHERE agentId = ?', [agentId]);
+}
+
+/* ------------------------------------------------------------------ *
  * Clear all
  * ------------------------------------------------------------------ */
 
@@ -733,6 +779,7 @@ function clearAll(): void {
     mustDb().exec('DELETE FROM messages');
     mustDb().exec('DELETE FROM conversations');
     mustDb().exec('DELETE FROM memories');
+    mustDb().exec('DELETE FROM agents');
   });
   mustDb().exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
 }
@@ -805,6 +852,20 @@ async function handle(req: StoreRequest): Promise<StoreResponse> {
 
     case 'LIST_MEMORIES':
       return { type: 'MEMORIES', requestId: req.requestId, memories: listMemories() };
+
+    case 'UPSERT_AGENT':
+      upsertAgent(req.agent);
+      return { type: 'OK', requestId: req.requestId };
+
+    case 'GET_AGENT':
+      return { type: 'AGENT', requestId: req.requestId, agent: getAgent(req.agentId) };
+
+    case 'LIST_AGENTS':
+      return { type: 'AGENTS', requestId: req.requestId, agents: listAgents() };
+
+    case 'DELETE_AGENT':
+      deleteAgent(req.agentId);
+      return { type: 'OK', requestId: req.requestId };
 
     case 'CLEAR_ALL':
       clearAll();

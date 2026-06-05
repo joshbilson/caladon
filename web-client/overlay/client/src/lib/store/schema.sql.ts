@@ -17,7 +17,7 @@
  * This DDL is idempotent (`IF NOT EXISTS`) so re-opening an existing store is a no-op.
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const SCHEMA_SQL = /* sql */ `
 PRAGMA foreign_keys = ON;
@@ -120,6 +120,23 @@ CREATE TABLE IF NOT EXISTS memories (
   value      TEXT NOT NULL,
   tokenCount INTEGER NOT NULL DEFAULT 0,
   updatedAt  INTEGER NOT NULL
+);
+
+-- User-authored AGENTS (trust-no-one: on-device only). An agent is a saved {name, instructions,
+-- model, tools} config you chat with; at send time the client injects the agent's instructions as a
+-- system prefix + routes the turn to the agent's model (client-orchestrated — the gateway never
+-- stores agent configs). configJson is the lossless LibreChat agent object for faithful round-trip.
+CREATE TABLE IF NOT EXISTS agents (
+  agentId      TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  description  TEXT,
+  instructions TEXT,
+  model        TEXT,
+  provider     TEXT,
+  tools        TEXT,
+  configJson   TEXT NOT NULL,
+  createdAt    INTEGER NOT NULL,
+  updatedAt    INTEGER NOT NULL
 );
 
 PRAGMA user_version = ${SCHEMA_VERSION};

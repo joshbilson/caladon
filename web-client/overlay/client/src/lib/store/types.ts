@@ -206,6 +206,52 @@ export interface ListMemoriesRequest {
   requestId: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * Agents (user-authored assistant configs; device-only)
+ * ------------------------------------------------------------------ */
+
+/** One persisted agent (salient columns + the lossless LibreChat agent object as configJson). */
+export interface StoredAgent {
+  agentId: string;
+  name: string;
+  description: string | null;
+  instructions: string | null;
+  model: string | null;
+  provider: string | null;
+  /** JSON-encoded string[] of tool names (or null). */
+  tools: string | null;
+  configJson: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Create or update an agent (INSERT OR REPLACE by agentId). */
+export interface UpsertAgentRequest {
+  type: 'UPSERT_AGENT';
+  requestId: string;
+  agent: StoredAgent;
+}
+
+/** Load one agent by id. */
+export interface GetAgentRequest {
+  type: 'GET_AGENT';
+  requestId: string;
+  agentId: string;
+}
+
+/** List all agents (most-recently-updated first). */
+export interface ListAgentsRequest {
+  type: 'LIST_AGENTS';
+  requestId: string;
+}
+
+/** Delete an agent by id. */
+export interface DeleteAgentRequest {
+  type: 'DELETE_AGENT';
+  requestId: string;
+  agentId: string;
+}
+
 /** The full request union. */
 export type StoreRequest =
   | InitRequest
@@ -221,6 +267,10 @@ export type StoreRequest =
   | UpsertMemoryRequest
   | DeleteMemoryRequest
   | ListMemoriesRequest
+  | UpsertAgentRequest
+  | GetAgentRequest
+  | ListAgentsRequest
+  | DeleteAgentRequest
   | ClearAllRequest;
 
 /** Discriminant union of request `type`s. */
@@ -285,6 +335,20 @@ export interface MemoriesResponse {
   memories: StoredMemory[];
 }
 
+/** All persisted agents (most-recently-updated first). */
+export interface AgentsResponse {
+  type: 'AGENTS';
+  requestId: string;
+  agents: StoredAgent[];
+}
+
+/** A single agent (or null if not found). */
+export interface AgentResponse {
+  type: 'AGENT';
+  requestId: string;
+  agent: StoredAgent | null;
+}
+
 /** The full response union. */
 export type StoreResponse =
   | OkResponse
@@ -293,7 +357,9 @@ export type StoreResponse =
   | ListConvosResponse
   | SearchResponse
   | VectorsResponse
-  | MemoriesResponse;
+  | MemoriesResponse
+  | AgentsResponse
+  | AgentResponse;
 
 /** Discriminant union of response `type`s. */
 export type StoreResponseType = StoreResponse['type'];
