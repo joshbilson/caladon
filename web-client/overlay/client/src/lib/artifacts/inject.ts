@@ -42,12 +42,18 @@ Do NOT use React/JSX artifacts — they are not supported here; build interactiv
 "rest of code unchanged" comments. For short snippets or one-off answers, reply normally instead of
 using an artifact.`;
 
-/** Read the persisted artifacts toggle as a fallback when the conversation field isn't populated. */
+/**
+ * Whether artifacts are enabled. Defaults to ON: the upstream composer "tools" badge row that would
+ * toggle `conversation.artifacts` does not render for Caladon's custom endpoint, so without a
+ * default-on flag artifacts would be unreachable. Users can opt out by setting the flag to 'false'
+ * (a Settings toggle can write it later). The artifact instructions tell the model to use artifacts
+ * only for substantial, reusable content, so default-on does not spam artifacts into casual replies.
+ */
 function artifactsFlagOn(): boolean {
   try {
-    return localStorage.getItem('caladon:artifactsEnabled') === 'true';
+    return localStorage.getItem('caladon:artifactsEnabled') !== 'false';
   } catch {
-    return false;
+    return true;
   }
 }
 
