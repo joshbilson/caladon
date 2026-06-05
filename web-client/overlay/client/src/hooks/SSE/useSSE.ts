@@ -199,7 +199,7 @@ export default function useSSE(
       }
 
       const rawPromptText = String((payload as { text?: string }).text ?? '');
-      const model = (payload as { model?: string }).model;
+      let model = (payload as { model?: string }).model;
 
       // RAG (trust-critical): retrieve relevant on-device chunks and PREPEND a <context> block to
       // the prompt BEFORE it is sealed, so the gateway only ever sees the sealed envelope — the
@@ -210,7 +210,29 @@ export default function useSSE(
 
       // MEMORY (trust-critical): prepend the user's persistent on-device memories the same way —
       // inside the trust boundary, sealed with the prompt. Fails OPEN to the un-augmented prompt.
-      const promptText = await injectMemoriesIntoPrompt(ragPromptText);
+      let promptText = await injectMemoriesIntoPrompt(ragPromptText);
+
+      // AGENTS (trust-critical): if this turn targets a user agent (endpoint 'agents' → payload
+      // carries agent_id), resolve the agent from the DEVICE store and apply its config CLIENT-SIDE
+      // before sealing: prepend its instructions as a system prefix and route the turn to the
+      // agent's model (the per-turn model the gateway honours). The gateway never sees the agent
+      // config — only the sealed prompt. Fails OPEN (a missing/closed store → a normal turn).
+      const agentId = (payload as { agent_id?: string }).agent_id;
+      if (agentId) {
+        try {
+          const agent = await getStoreProxy().getAgent(agentId);
+          if (agent) {
+            if (agent.model) {
+              model = agent.model;
+            }
+            if (agent.instructions && agent.instructions.trim()) {
+              promptText = `${agent.instructions.trim()}\n\n${promptText}`;
+            }
+          }
+        } catch {
+          /* fail open: send as a normal turn */
+        }
+      }
 
       let wireBody: unknown;
       let authHeader: string;

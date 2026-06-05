@@ -226,7 +226,9 @@ app.get('/api/roles/:role', (c) =>
       // encrypted device store, never the network). Granting these unlocks the MemoryPanel UI; no
       // server backing is implied (the /api/memories stubs below are just 404-avoidance safety nets).
       MEMORIES: { USE: true, CREATE: true, UPDATE: true, READ: true, OPT_OUT: true },
-      AGENTS: { USE: false, CREATE: false, SHARE: false, SHARE_PUBLIC: false },
+      // Agents are DEVICE-ONLY in Caladon (CRUD hooks overlaid to the encrypted device store, never
+      // the network). USE+CREATE unlock the agent builder + selection; SHARE stays false (no server).
+      AGENTS: { USE: true, CREATE: true, SHARE: false, SHARE_PUBLIC: false },
       MULTI_CONVO: { USE: false },
       // Enabled: temporary (non-persisted) chats are a device-side concept — a temporary
       // conversation is simply not written to the on-device store (useSSE skips persistTurn when
@@ -289,6 +291,15 @@ app.get('/api/endpoints', (c) =>
       order: 0,
       modelDisplayLabel: 'Caladon',
       userProvide: false,
+    },
+    // The `agents` endpoint surfaces user-authored agents (stored ONLY on-device — the agent CRUD
+    // hooks are overlaid to the device store; see data-provider/Agents). It carries no secret; it
+    // just lets the SPA render the agents group in the model picker + the agent builder panel. The
+    // sealed send-path is unchanged: useSSE resolves the selected agent's instructions + model and
+    // seals the turn to the gateway as usual.
+    agents: {
+      order: 1,
+      modelDisplayLabel: 'Caladon Agent',
     },
   }),
 );
@@ -367,6 +378,16 @@ app.get('/api/user/settings/favorites', (c) => c.json([]));
  * (`activeJobsData?.activeJobIds ?? []`). No resumable jobs without a server-side store.
  */
 app.get('/api/agents/chat/active', (c) => c.json({ activeJobIds: [] }));
+
+/* Agents are device-only: list/get/create/update/delete go through the overlaid data-provider hooks
+ * (→ encrypted device store), NOT these routes. These stubs only satisfy the few agent hooks that
+ * still hit the network (tools picker, marketplace categories, marketplace list) so the builder +
+ * panels render without 404s. All return empty/disabled shapes — there is no server agent store. */
+app.get('/api/agents/tools', (c) => c.json([])); // useAvailableAgentToolsQuery → TPlugin[]
+app.get('/api/agents/categories', (c) => c.json([])); // useGetAgentCategoriesQuery → TMarketplaceCategory[]
+app.get('/api/agents/marketplace', (c) =>
+  c.json({ object: 'list', data: [], has_more: false, first_id: null, last_id: null }),
+);
 
 /**
  * GET /api/files → TFile[] (getFiles). No uploaded files (no DB / no storage).
