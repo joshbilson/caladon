@@ -85,6 +85,24 @@ function toTConversation(row: StoredConversation): TConversation {
  * history is visible after a reload. Idempotent: re-running only adds conversations the cache
  * doesn't already hold (live state wins), and the seed is skipped once the cache is non-empty.
  */
+/** How long (ms) the just-unlocked window during which we re-assert the seed lasts, and the tick. */
+const RESEED_WINDOW_MS = 4000;
+const RESEED_TICK_MS = 200;
+/** Max ticks to wait for the store worker to finish opening (OPFS init) after auth flips. */
+const OPEN_WAIT_TICKS = 50;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** True when the sidebar's allConversations cache holds at least one conversation. */
+function listHasConversations(queryClient: ReturnType<typeof useQueryClient>): boolean {
+  const data = queryClient.getQueryData<InfiniteData<ConversationCursorData>>(
+    DEFAULT_ALL_CONVERSATIONS_KEY,
+  );
+  return !!data?.pages?.some((p) => p.conversations.length > 0);
+}
+
 export default function useConversationList(): void {
   const { isAuthenticated } = useAuthContext();
   const queryClient = useQueryClient();
@@ -95,57 +113,76 @@ export default function useConversationList(): void {
     }
 
     const store = getStoreProxy();
-    // The proxy awaits an internal `ready` that only resolves after `openStore`. If the store
-    // isn't open yet (pre-unlock / OPFS init pending), bail; a later run (re-triggered when
-    // `isAuthenticated` flips) will seed it.
-    if (!store.isOpen) {
-      return;
-    }
-
-    // If the sidebar cache already holds conversations (a fresh turn, or a prior seed), skip:
-    // live state always wins over the persisted snapshot.
-    const existing = queryClient.getQueryData<InfiniteData<ConversationCursorData>>(
-      DEFAULT_ALL_CONVERSATIONS_KEY,
-    );
-    if (existing?.pages?.some((p) => p.conversations.length > 0)) {
-      return;
-    }
-
     let cancelled = false;
 
+    // The sidebar reads history from `useConversationsInfiniteQuery` → GET /api/convos, which in
+    // Caladon the shim stubs EMPTY (the gateway keeps no server-side conversation store). That
+    // network query races our store seed and, whenever it resolves empty AFTER we seed, CLOBBERS
+    // the seeded list back to nothing (the bug that left the sidebar blank on prod even though the
+    // conversation persisted and hydrated fine). Pin the query so it treats seeded data as fresh
+    // and never auto-refetches it away. (Defaults are read when the query is (re)observed; the
+    // re-assert loop below is the hard guarantee against an already-in-flight empty fetch.)
+    queryClient.setQueryDefaults([QueryKeys.allConversations], {
+      staleTime: Infinity,
+      gcTime: Infinity,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    });
+
     void (async () => {
+      // Wait out the store open (openStore is awaited before auth flips, but the worker's OPFS
+      // init can still trail the first effect run — poll briefly rather than bail with no retry).
+      for (let i = 0; i < OPEN_WAIT_TICKS && !store.isOpen && !cancelled; i++) {
+        await delay(RESEED_TICK_MS);
+      }
+      if (cancelled || !store.isOpen) {
+        return;
+      }
+
+      let stored: TConversation[] = [];
       try {
         const { conversations } = await store.listConversations(SEED_PAGE_SIZE);
-        if (cancelled || conversations.length === 0) {
+        if (cancelled) {
           return;
         }
-
-        // Ensure the canonical default key exists as a well-formed empty InfiniteData so the
-        // fan-out below has a page-0 to prepend into (covers "sidebar hasn't mounted yet").
-        queryClient.setQueryData<InfiniteData<ConversationCursorData>>(
-          DEFAULT_ALL_CONVERSATIONS_KEY,
-          (old) =>
-            old ?? {
-              pageParams: [undefined],
-              pages: [{ conversations: [], nextCursor: null }],
-            },
-        );
-
-        // `listConversations` returns most-recently-updated FIRST; the fan-out prepends each
-        // conversation to page-0, so insert in REVERSE to preserve newest-first ordering.
-        const tConvos = conversations.map(toTConversation);
-        for (let i = tConvos.length - 1; i >= 0; i--) {
-          const convo = tConvos[i];
-          if (convo.conversationId == null || convo.conversationId === Constants.NEW_CONVO) {
-            continue;
-          }
-          // Prefix-matches every mounted `allConversations` variant AND the default key seeded
-          // above; de-dupes by conversationId so re-running never double-inserts.
-          addConversationToAllConversationsQueries(queryClient, convo);
-        }
+        stored = conversations
+          .map(toTConversation)
+          .filter((c) => c.conversationId != null && c.conversationId !== Constants.NEW_CONVO);
       } catch (err) {
         // Best-effort: a failure must never break the sidebar.
         console.error('[caladon] failed to seed conversation list from device store:', err);
+        return;
+      }
+      if (stored.length === 0) {
+        return; // genuinely-empty identity — nothing to seed (and nothing to fight over).
+      }
+
+      // Seed, then re-assert for a short window so the empty /api/convos fetch can't leave the
+      // sidebar blank: every tick where the list is empty, re-inject the stored conversations.
+      // Bounded to the just-unlocked window so a later user-initiated "delete all" is NOT undone
+      // (we only resurrect during the initial seed race, never afterwards).
+      const seed = (): void => {
+        // Ensure the canonical default key exists as well-formed empty InfiniteData so the fan-out
+        // has a page-0 to prepend into (covers "sidebar query hasn't mounted yet").
+        queryClient.setQueryData<InfiniteData<ConversationCursorData>>(
+          DEFAULT_ALL_CONVERSATIONS_KEY,
+          (old) =>
+            old ?? { pageParams: [undefined], pages: [{ conversations: [], nextCursor: null }] },
+        );
+        // listConversations returns most-recently-updated FIRST; the fan-out prepends to page-0,
+        // so insert in REVERSE to preserve newest-first order. De-dupes by id (idempotent).
+        for (let i = stored.length - 1; i >= 0; i--) {
+          addConversationToAllConversationsQueries(queryClient, stored[i]);
+        }
+      };
+
+      const ticks = Math.ceil(RESEED_WINDOW_MS / RESEED_TICK_MS);
+      for (let t = 0; t < ticks && !cancelled; t++) {
+        if (!listHasConversations(queryClient)) {
+          seed();
+        }
+        await delay(RESEED_TICK_MS);
       }
     })();
 
