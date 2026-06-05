@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 import { defineConfig } from 'vite';
 import { createRequire } from 'module';
@@ -160,6 +161,12 @@ export default defineConfig(({ command }) => ({
     compression({
       threshold: 10240,
     }),
+    // Caladon: copy the on-device RAG assets into dist/ at build time. publicDir is disabled for
+    // `vite build` (line below), so the MiniLM model fetched to public/models/ would never reach
+    // dist/; and the ONNX Runtime wasm is otherwise fetched from a CDN that CSP+COEP block. This
+    // runs last (after the PWA/workbox step) so the large model/wasm files are never swept into the
+    // service-worker precache manifest. See web-client/overlay/client/src/lib/store/worker/embed.worker.ts.
+    caladonRagAssets(),
   ],
   publicDir: command === 'serve' ? './public' : false,
   build: {
@@ -382,6 +389,65 @@ export default defineConfig(({ command }) => ({
     },
   },
 }));
+
+/**
+ * Caladon RAG assets (build-only). `publicDir` is `false` during `vite build` (see config above), so
+ * the MiniLM model that apply-overlay.sh fetches into `public/models/` is never copied into `dist/`.
+ * And @huggingface/transformers v4 defaults the ONNX Runtime wasm to a jsDelivr CDN URL that the
+ * shim's CSP `connect-src 'self'` + COEP `require-corp` block. This plugin, on `closeBundle`, copies
+ * BOTH into the build output: `public/models/` → `dist/models/` and `onnxruntime-web/dist/ort-wasm-*`
+ * → `dist/ort/`. The shim serves `dist/` same-origin, and the embed worker points
+ * `env.backends.onnx.wasm.wasmPaths` at `/ort/`. Both are best-effort (fail-open): a missing source
+ * logs a warning and RAG retrieval is simply skipped — chat is never blocked.
+ */
+function caladonRagAssets(): Plugin {
+  let outDir = path.resolve(__dirname, 'dist');
+  return {
+    name: 'caladon-rag-assets',
+    apply: 'build',
+    configResolved(resolved) {
+      outDir = path.resolve(resolved.root, resolved.build.outDir);
+    },
+    closeBundle() {
+      // 1. MiniLM model: public/models → dist/models (same-origin /models/, env.localModelPath).
+      const modelSrc = path.resolve(__dirname, 'public/models');
+      if (fs.existsSync(modelSrc)) {
+        fs.cpSync(modelSrc, path.join(outDir, 'models'), { recursive: true });
+        // eslint-disable-next-line no-console
+        console.log('[caladon-rag-assets] copied public/models → dist/models');
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[caladon-rag-assets] public/models absent — RAG model will 404 (fail-open)');
+      }
+      // 2. ONNX Runtime wasm/mjs (all per-browser variants) → dist/ort (same-origin /ort/).
+      // onnxruntime-web's package.json restricts subpath access via "exports", so require.resolve
+      // can't reach it — probe the known node_modules locations directly (client, hoisted monorepo
+      // root, and the workspace root) and take the first that has the dist dir.
+      const ortCandidates = [
+        path.resolve(__dirname, 'node_modules/onnxruntime-web/dist'),
+        path.resolve(__dirname, '../node_modules/onnxruntime-web/dist'),
+        path.resolve(__dirname, '../../node_modules/onnxruntime-web/dist'),
+      ];
+      const ortDistDir = ortCandidates.find((d) => fs.existsSync(d)) ?? null;
+      if (ortDistDir && fs.existsSync(ortDistDir)) {
+        const ortOut = path.join(outDir, 'ort');
+        fs.mkdirSync(ortOut, { recursive: true });
+        let copied = 0;
+        for (const f of fs.readdirSync(ortDistDir)) {
+          if (/^ort-wasm.*\.(wasm|mjs)$/.test(f)) {
+            fs.copyFileSync(path.join(ortDistDir, f), path.join(ortOut, f));
+            copied++;
+          }
+        }
+        // eslint-disable-next-line no-console
+        console.log(`[caladon-rag-assets] copied ${copied} onnxruntime-web file(s) → dist/ort`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn('[caladon-rag-assets] onnxruntime-web/dist not found — ORT wasm not same-origin');
+      }
+    },
+  };
+}
 
 interface SourcemapExclude {
   excludeNodeModules?: boolean;

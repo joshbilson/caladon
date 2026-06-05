@@ -17,7 +17,7 @@
  * This DDL is idempotent (`IF NOT EXISTS`) so re-opening an existing store is a no-op.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const SCHEMA_SQL = /* sql */ `
 PRAGMA foreign_keys = ON;
@@ -94,12 +94,14 @@ CREATE TABLE IF NOT EXISTS embeddings (
   vec     BLOB NOT NULL
 );
 
--- Per-message embeddings (the STORE_VECTORS / HYDRATE_VECTORS path). Distinct from the
--- document-RAG embeddings above: those key off chunks(fileId) for uploaded docs; these key off a
--- message + chunk ordinal so the in-memory cosine index can be rebuilt per conversation message.
--- Cascades with the owning message so deleting a conversation drops its vectors too.
+-- Embedding vectors for the STORE_VECTORS / HYDRATE_VECTORS path (the in-memory cosine index is
+-- rebuilt from here). messageId is a generic owner key, NOT a foreign key into messages: the RAG
+-- ingest stores UPLOADED-DOCUMENT vectors under a synthetic "doc:<fileId>" owner id (see useRag),
+-- which is not a row in messages. A FK to messages here would (and did) make every document ingest
+-- fail with SQLITE_CONSTRAINT_FOREIGNKEY. Deletion is explicit: storeVectors replaces an owner's
+-- rows (DELETE-then-insert) and removeFile clears them, so no ON DELETE CASCADE is needed.
 CREATE TABLE IF NOT EXISTS message_embeddings (
-  messageId TEXT NOT NULL REFERENCES messages(messageId) ON DELETE CASCADE,
+  messageId TEXT NOT NULL,
   ord       INTEGER NOT NULL,
   text      TEXT NOT NULL,
   vec       BLOB NOT NULL,

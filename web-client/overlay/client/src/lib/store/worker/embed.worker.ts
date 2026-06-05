@@ -138,6 +138,15 @@ async function getPipeline(): Promise<{ extract: FeatureExtractionPipeline; back
     // OPFS isolation already gives us crossOriginIsolated, but we keep this conservative + robust.
     if (env.backends?.onnx?.wasm) {
       env.backends.onnx.wasm.proxy = false;
+      // Serve the ONNX Runtime wasm/mjs SAME-ORIGIN from /ort/ (the caladon-rag-assets vite plugin
+      // copies node_modules/onnxruntime-web/dist/ort-wasm-*.{wasm,mjs} into dist/ort/). Without this,
+      // transformers.js v4 defaults wasmPaths to cdn.jsdelivr.net/npm/onnxruntime-web@<dev-prerelease>
+      // — which the shim's CSP (connect-src 'self') + COEP (require-corp) block, and which isn't even
+      // published to the CDN (it's a dev pre-release). The trailing-slash PREFIX lets ORT append the
+      // correct per-browser variant itself (asyncify / jsep / jspi / plain-threaded). Trust-no-one:
+      // nothing is fetched off-origin. Set BEFORE the first pipeline() call so it overrides the CDN
+      // default the transformers module resolved at import time, before any ORT session opens.
+      (env.backends.onnx.wasm as { wasmPaths?: string }).wasmPaths = '/ort/';
     }
 
     // Try WebGPU (fast path). Wrap the WHOLE pipeline() call so both "no navigator.gpu" and a

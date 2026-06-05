@@ -476,7 +476,18 @@ if (config.staticDir) {
   //    fires when nothing matched (it calls next()), so we serve index.html as the SPA entry.
   app.get('*', (c, next) => {
     const p = c.req.path;
-    if (p.startsWith('/api/') || p.startsWith('/pcs-collateral/')) return next();
+    // /models/* (MiniLM RAG model) and /ort/* (ONNX Runtime wasm) are SAME-ORIGIN binary assets the
+    // serveStatic above returns for real files. Exclude them from the SPA fallback so a MISSING such
+    // file returns a clean 404 — otherwise it falls through to index.html and the embed worker's
+    // fetch() gets a 200 HTML body, dying with "Unexpected token '<', \"<!DOCTYPE\"..." (the original
+    // RAG-warmup failure). They are fail-open: a 404 just skips RAG retrieval, never blocks chat.
+    if (
+      p.startsWith('/api/') ||
+      p.startsWith('/pcs-collateral/') ||
+      p.startsWith('/models/') ||
+      p.startsWith('/ort/')
+    )
+      return next();
     // path: 'index.html' makes serveStatic serve that file regardless of the request path.
     return serveStatic({ root: config.staticDir, path: 'index.html' })(c, next);
   });

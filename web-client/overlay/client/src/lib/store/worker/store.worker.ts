@@ -300,6 +300,19 @@ async function init(hexKey: string): Promise<void> {
   mustDb().exec(persistent ? 'PRAGMA journal_mode = MEMORY' : 'PRAGMA journal_mode = WAL');
   mustDb().exec('PRAGMA synchronous = NORMAL');
 
+  // MIGRATION (schema v1→v2): the original message_embeddings carried a foreign key
+  // `messageId REFERENCES messages(messageId) ON DELETE CASCADE`. RAG stores UPLOADED-DOCUMENT
+  // vectors under a synthetic "doc:<fileId>" owner id (not a message row), so every document ingest
+  // failed with SQLITE_CONSTRAINT_FOREIGNKEY — meaning the table is guaranteed EMPTY. Drop the
+  // old-shaped table so the FK-free CREATE in SCHEMA_SQL below recreates it. Keyed off the table's
+  // own DDL so it runs exactly once, only where the old shape exists (no-op on fresh dbs).
+  const meSql = mustDb().selectValue(
+    "SELECT sql FROM sqlite_schema WHERE type='table' AND name='message_embeddings'",
+  );
+  if (typeof meSql === 'string' && /REFERENCES\s+messages/i.test(meSql)) {
+    mustDb().exec('DROP TABLE message_embeddings');
+  }
+
   // Apply the schema (idempotent).
   mustDb().exec(SCHEMA_SQL);
 
