@@ -244,8 +244,6 @@ export default function useSSE(
             // graph). Read all of them and union the targets so orchestration fires regardless of
             // which control the user touched. `subagents` is only honoured when `enabled !== false`.
             const agentIds: unknown[] = collectSubagentIds(agent.configJson, agentId);
-            // eslint-disable-next-line no-console
-            console.debug('[caladon subagents] agentId', agentId, 'configLen', agent.configJson?.length, 'agent_ids', agentIds);
             if (agentIds.length) {
               try {
                 const { steps, context } = await orchestrateSubagents(agentIds, promptText);

@@ -85,8 +85,6 @@ export async function orchestrateSubagents(
           ''),
     )
     .filter(Boolean);
-  // eslint-disable-next-line no-console
-  console.debug('[caladon subagents] orchestrate ids:', ids);
   // Resolve once; fall back to a full list scan if a direct id lookup misses (id-shape drift).
   let all: Awaited<ReturnType<typeof store.listAgents>> = [];
   try {
@@ -100,8 +98,6 @@ export async function orchestrateSubagents(
     try {
       const row = (await store.getAgent(id)) ?? all.find((a) => a.agentId === id) ?? null;
       if (!row) {
-        // eslint-disable-next-line no-console
-        console.debug('[caladon subagents] subagent not found in store:', id);
         continue;
       }
       const sub = storedToAgent(row);

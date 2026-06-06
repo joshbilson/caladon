@@ -60,8 +60,6 @@ async function createAgentInStore(params: t.AgentCreateParams): Promise<t.Agent>
     ...(params as Record<string, unknown>),
   } as unknown as t.Agent;
   agent.id = id; // ensure the spread didn't clobber it
-  // eslint-disable-next-line no-console
-  console.debug('[caladon subagents] createAgentInStore agent_ids:', (agent as { agent_ids?: unknown }).agent_ids);
   await getStoreProxy().upsertAgent(agentToStored(agent));
   return agent;
 }
@@ -72,8 +70,6 @@ async function updateAgentInStore(agent_id: string, data: t.AgentUpdateParams): 
   const existing = await store.getAgent(agent_id);
   const base = existing ? storedToAgent(existing) : ({ id: agent_id } as t.Agent);
   const merged = { ...(base as Record<string, unknown>), ...(data as Record<string, unknown>), id: agent_id } as unknown as t.Agent;
-  // eslint-disable-next-line no-console
-  console.debug('[caladon subagents] updateAgentInStore data.agent_ids:', (data as { agent_ids?: unknown }).agent_ids, '-> merged.agent_ids:', (merged as { agent_ids?: unknown }).agent_ids);
   await store.upsertAgent(agentToStored(merged));
   return merged;
 }
