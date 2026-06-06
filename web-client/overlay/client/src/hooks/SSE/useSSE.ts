@@ -33,7 +33,7 @@ import { augmentPromptWithRAG } from '~/lib/rag/retrieval';
 import { injectMemoriesIntoPrompt } from '~/lib/memory/inject';
 import { injectArtifactsIntoPrompt } from '~/lib/artifacts/inject';
 import { injectActiveSkillIntoPrompt } from '~/lib/skills/inject';
-import { orchestrateSubagents } from '~/lib/subagents/orchestrate';
+import { orchestrateSubagents, collectSubagentIds } from '~/lib/subagents/orchestrate';
 import { getStoreProxy } from '~/lib/store';
 import type { StoredConversation, StoredMessage } from '~/lib/store';
 import store from '~/store';
@@ -238,13 +238,12 @@ export default function useSSE(
             // (agent_ids in its config), run each subagent as a headless sealed completion FIRST and
             // prepend their synthesised context so the main agent composes the final answer. Each
             // sub-call is a normal sealed round-trip — no new trust surface, no gateway change.
-            let agentIds: unknown[] = [];
-            try {
-              const cfg = JSON.parse(agent.configJson) as { agent_ids?: unknown[] };
-              agentIds = Array.isArray(cfg.agent_ids) ? cfg.agent_ids : [];
-            } catch {
-              /* no chain */
-            }
+            // The builder persists a subagent chain in one of THREE shapes depending on which
+            // Advanced control was used: the flat `agent_ids` (AgentChain), the nested
+            // `subagents.agent_ids` (AgentSubagents "Beta" toggle), or `edges` (AgentHandoffs
+            // graph). Read all of them and union the targets so orchestration fires regardless of
+            // which control the user touched. `subagents` is only honoured when `enabled !== false`.
+            const agentIds: unknown[] = collectSubagentIds(agent.configJson, agentId);
             // eslint-disable-next-line no-console
             console.debug('[caladon subagents] agentId', agentId, 'configLen', agent.configJson?.length, 'agent_ids', agentIds);
             if (agentIds.length) {
