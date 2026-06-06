@@ -65,19 +65,41 @@ export async function runSealedCompletion(prompt: string, model?: string): Promi
  * skipped). `agentIds` come from the main agent's config; each is resolved from the device store.
  */
 export async function orchestrateSubagents(
-  agentIds: string[],
+  agentIds: unknown[],
   userPrompt: string,
 ): Promise<{ steps: SubagentStep[]; context: string }> {
   const store = getStoreProxy();
-  if (!store.isOpen || !agentIds.length) {
+  if (!store.isOpen || !agentIds?.length) {
     return { steps: [], context: '' };
   }
+  // agent_ids items are normally plain id strings, but be robust to {id}/{agent_id} object shapes.
+  const ids = agentIds
+    .map((it) =>
+      typeof it === 'string'
+        ? it
+        : ((it as { id?: string; agent_id?: string; agentId?: string })?.id ??
+          (it as { agent_id?: string })?.agent_id ??
+          (it as { agentId?: string })?.agentId ??
+          ''),
+    )
+    .filter(Boolean);
+  // eslint-disable-next-line no-console
+  console.debug('[caladon subagents] orchestrate ids:', ids);
+  // Resolve once; fall back to a full list scan if a direct id lookup misses (id-shape drift).
+  let all: Awaited<ReturnType<typeof store.listAgents>> = [];
+  try {
+    all = await store.listAgents();
+  } catch {
+    /* ignore */
+  }
   const steps: SubagentStep[] = [];
-  for (const id of agentIds.slice(0, 5)) {
+  for (const id of ids.slice(0, 5)) {
     // cap at 5 to bound latency/cost
     try {
-      const row = await store.getAgent(id);
+      const row = (await store.getAgent(id)) ?? all.find((a) => a.agentId === id) ?? null;
       if (!row) {
+        // eslint-disable-next-line no-console
+        console.debug('[caladon subagents] subagent not found in store:', id);
         continue;
       }
       const sub = storedToAgent(row);

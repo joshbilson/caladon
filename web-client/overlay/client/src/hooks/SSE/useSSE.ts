@@ -238,13 +238,15 @@ export default function useSSE(
             // (agent_ids in its config), run each subagent as a headless sealed completion FIRST and
             // prepend their synthesised context so the main agent composes the final answer. Each
             // sub-call is a normal sealed round-trip — no new trust surface, no gateway change.
-            let agentIds: string[] = [];
+            let agentIds: unknown[] = [];
             try {
-              const cfg = JSON.parse(agent.configJson) as { agent_ids?: string[] };
+              const cfg = JSON.parse(agent.configJson) as { agent_ids?: unknown[] };
               agentIds = Array.isArray(cfg.agent_ids) ? cfg.agent_ids : [];
             } catch {
               /* no chain */
             }
+            // eslint-disable-next-line no-console
+            console.debug('[caladon subagents] agentId', agentId, 'configLen', agent.configJson?.length, 'agent_ids', agentIds);
             if (agentIds.length) {
               try {
                 const { steps, context } = await orchestrateSubagents(agentIds, promptText);
